@@ -1,0 +1,143 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lights",
+        "description": "Choose the RGB light to drive and any follower lights.",
+        "data": {
+          "name": "Name",
+          "primary": "Primary light",
+          "followers": "Follower lights"
+        }
+      },
+      "settings": {
+        "title": "Colour cycle settings",
+        "description": "{warning}",
+        "data": {
+          "mode": "Default mode",
+          "interval": "Interval (Random and Drift)",
+          "hue_speed": "Hue speed",
+          "max_step": "Maximum step",
+          "fixed_fade": "Fixed colour fade (0 = use hue speed)",
+          "min_jump": "Drift minimum jump",
+          "max_jump": "Drift maximum jump",
+          "momentum": "Drift momentum",
+          "rainbow_lap": "Rainbow lap time",
+          "brightness_fade": "Brightness fade"
+        },
+        "data_description": {
+          "mode": "The effect used when the light is turned on without one.",
+          "interval": "Seconds between new colour picks.",
+          "hue_speed": "How fast the hue moves, in degrees per second.",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap.",
+          "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
+          "min_jump": "Smallest Drift hue change, in degrees.",
+          "max_jump": "Largest Drift hue change, in degrees.",
+          "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
+          "rainbow_lap": "Seconds for one full Rainbow lap. Raised automatically if the lights cannot keep up.",
+          "brightness_fade": "Default seconds for a brightness change."
+        }
+      },
+      "follower": {
+        "title": "Follower: {entity}",
+        "description": "Settings for this follower light.",
+        "data": {
+          "scale": "Brightness scale",
+          "offset": "Rainbow phase offset"
+        },
+        "data_description": {
+          "scale": "Fraction of the primary brightness (0.1 to 1.0).",
+          "offset": "Degrees added to the Rainbow hue for this light."
+        }
+      }
+    },
+    "error": {
+      "primary_is_follower": "The primary light cannot also be a follower.",
+      "name_required": "Enter a name.",
+      "jump_range": "The minimum jump cannot exceed the maximum jump."
+    },
+    "abort": {}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lights",
+        "description": "Choose the RGB light to drive and any follower lights.",
+        "data": {
+          "primary": "Primary light",
+          "followers": "Follower lights"
+        }
+      },
+      "settings": {
+        "title": "Colour cycle settings",
+        "description": "{warning}",
+        "data": {
+          "mode": "Default mode",
+          "interval": "Interval (Random and Drift)",
+          "hue_speed": "Hue speed",
+          "max_step": "Maximum step",
+          "fixed_fade": "Fixed colour fade (0 = use hue speed)",
+          "min_jump": "Drift minimum jump",
+          "max_jump": "Drift maximum jump",
+          "momentum": "Drift momentum",
+          "rainbow_lap": "Rainbow lap time",
+          "brightness_fade": "Brightness fade"
+        },
+        "data_description": {
+          "mode": "The effect used when the light is turned on without one.",
+          "interval": "Seconds between new colour picks.",
+          "hue_speed": "How fast the hue moves, in degrees per second.",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap.",
+          "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
+          "min_jump": "Smallest Drift hue change, in degrees.",
+          "max_jump": "Largest Drift hue change, in degrees.",
+          "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
+          "rainbow_lap": "Seconds for one full Rainbow lap. Raised automatically if the lights cannot keep up.",
+          "brightness_fade": "Default seconds for a brightness change."
+        }
+      },
+      "follower": {
+        "title": "Follower: {entity}",
+        "description": "Settings for this follower light.",
+        "data": {
+          "scale": "Brightness scale",
+          "offset": "Rainbow phase offset"
+        },
+        "data_description": {
+          "scale": "Fraction of the primary brightness (0.1 to 1.0).",
+          "offset": "Degrees added to the Rainbow hue for this light."
+        }
+      }
+    },
+    "error": {
+      "primary_is_follower": "The primary light cannot also be a follower.",
+      "name_required": "Enter a name.",
+      "jump_range": "The minimum jump cannot exceed the maximum jump."
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "random": "Random",
+        "drift": "Drift",
+        "rainbow": "Rainbow"
+      }
+    }
+  },
+  "services": {
+    "set_brightness": {
+      "name": "Set brightness",
+      "description": "Update the brightness target of an ambient light. Fades to it if the cycle is running; never turns the light on or resumes a paused cycle.",
+      "fields": {
+        "brightness_pct": {
+          "name": "Brightness",
+          "description": "Target brightness, 0 to 100 percent (0 is treated as 1 %)."
+        },
+        "transition": {
+          "name": "Transition",
+          "description": "Fade length in seconds. Defaults to the configured brightness fade."
+        }
+      }
+    }
+  }
+}

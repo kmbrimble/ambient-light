@@ -1,0 +1,11 @@
+{
+  "domain": "ambient_light",
+  "name": "Ambient Light",
+  "codeowners": ["@kmbrimble"],
+  "config_flow": true,
+  "documentation": "https://github.com/kmbrimble/ambient-light",
+  "issue_tracker": "https://github.com/kmbrimble/ambient-light/issues",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "0.1.1"
+}

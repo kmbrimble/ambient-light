@@ -1,0 +1,22 @@
+set_brightness:
+  target:
+    entity:
+      integration: ambient_light
+      domain: light
+  fields:
+    brightness_pct:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+    transition:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 1
+          unit_of_measurement: s
