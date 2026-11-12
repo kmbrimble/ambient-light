@@ -2,16 +2,69 @@
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+import voluptuous as vol
 
-from .const import DOMAIN, HOOKS
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.service import async_extract_entity_ids
+from homeassistant.helpers.typing import ConfigType
+
+from .const import (
+    ATTR_BRIGHTNESS_PCT,
+    ATTR_TRANSITION,
+    DOMAIN,
+    HOOKS,
+    SERVICE_SET_BRIGHTNESS,
+)
 from .engine import Engine
+
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
+
+SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
+    {
+        vol.Required(ATTR_BRIGHTNESS_PCT): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+        vol.Optional(ATTR_TRANSITION): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
+    }
+)
 
 PLATFORMS = [Platform.LIGHT]
 
 type AmbientConfigEntry = ConfigEntry[Engine]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the service at component level, before any entity exists.
+
+    Registering it from the light platform (after the entity is added) lets an automation that
+    fires on the entity's first state write run before the service exists.
+    """
+
+    async def _set_brightness(call: ServiceCall) -> None:
+        registry = er.async_get(hass)
+        engines: list[Engine] = []
+        for entity_id in sorted(await async_extract_entity_ids(call)):
+            reg = registry.async_get(entity_id)
+            if reg is None or reg.platform != DOMAIN or reg.config_entry_id is None:
+                raise ServiceValidationError(
+                    f"{entity_id} is not an {DOMAIN} light; target the virtual ambient light"
+                )
+            entry = hass.config_entries.async_get_entry(reg.config_entry_id)
+            if entry is None or entry.state is not ConfigEntryState.LOADED:
+                raise ServiceValidationError(f"{entity_id} is not loaded")
+            engines.append(entry.runtime_data)
+        if not engines:
+            raise ServiceValidationError("No ambient light targeted")
+        transition = call.data.get(ATTR_TRANSITION)
+        for engine in engines:
+            engine.set_brightness(max(1.0, call.data[ATTR_BRIGHTNESS_PCT]), transition)
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_BRIGHTNESS, _set_brightness, schema=SET_BRIGHTNESS_SCHEMA
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AmbientConfigEntry) -> bool:

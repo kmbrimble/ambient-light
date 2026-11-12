@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-import voluptuous as vol
-
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
@@ -18,35 +16,17 @@ from homeassistant.components.light import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import (
-    AddConfigEntryEntitiesCallback,
-    async_get_current_platform,
-)
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.start import async_at_started
 
 from . import AmbientConfigEntry
-from .const import (
-    ATTR_BRIGHTNESS_PCT,
-    ATTR_TRANSITION,
-    DOMAIN,
-    EFFECT_BY_MODE,
-    EFFECT_LIST,
-    MODE_BY_EFFECT,
-    SERVICE_SET_BRIGHTNESS,
-)
+from .const import DOMAIN, EFFECT_BY_MODE, EFFECT_LIST, MODE_BY_EFFECT
 from .engine import Engine
 
 DIAG_INTERVAL = timedelta(seconds=60)
-
-SET_BRIGHTNESS_SCHEMA = {
-    vol.Required(ATTR_BRIGHTNESS_PCT): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
-    vol.Optional(ATTR_TRANSITION): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
-}
-
 
 @dataclass
 class _Restored(ExtraStoredData):
@@ -61,9 +41,6 @@ async def async_setup_entry(
 ) -> None:
     """Add the virtual light and register its service."""
     async_add_entities([AmbientLight(entry)])
-    async_get_current_platform().async_register_entity_service(
-        SERVICE_SET_BRIGHTNESS, SET_BRIGHTNESS_SCHEMA, "async_set_brightness"
-    )
 
 
 class AmbientLight(LightEntity, RestoreEntity):
@@ -117,7 +94,8 @@ class AmbientLight(LightEntity, RestoreEntity):
     def _snapshot_diag(self) -> dict[str, Any]:
         e = self._engine
         return {
-            "step_rate": e.measure_rates(),
+            "step_rate": e.capacity_rates(),
+            "sent_rate": e.measure_rates(),
             "min_rainbow_lap_s": round(e.min_lap, 1),
             "primary_unavailable_count": e.primary_unavailable_count,
             "failed_command_count": e.failed_command_count,
@@ -167,9 +145,3 @@ class AmbientLight(LightEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._engine.async_turn_off()
-
-    async def async_set_brightness(
-        self, brightness_pct: float, transition: float | None = None
-    ) -> None:
-        """Entity service: update the target; never resume, never turn on."""
-        self._engine.set_brightness(max(1.0, brightness_pct), transition)

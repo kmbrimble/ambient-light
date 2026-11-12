@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import logging
 import random
 import time
@@ -44,6 +45,11 @@ EWMA_ALPHA = 0.3
 MIN_RATE = 0.2
 WARN_INTERVAL = 600.0
 CONTEXT_MEMORY = 512
+INFO_INTERVAL = 600.0
+# An empty-context change counts as someone else only if it moves this far from what we last sent.
+# Anything smaller is rounding or an echo (tuya_local rewrites state from the device's own report).
+HUE_TOLERANCE = 12.0
+BRIGHTNESS_TOLERANCE = 0.15 * 255
 
 
 # Colour modes the engine never sends: a follower reporting one was changed by something else.
@@ -58,6 +64,24 @@ def _gone(state) -> bool:
 def _has_origin(ctx) -> bool:
     """True if the context was started by a user or by another service call."""
     return bool(ctx.user_id or ctx.parent_id)
+
+
+def _hue_diff(a: float, b: float) -> float:
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def _hue_bright(data) -> tuple[float | None, float | None]:
+    """(hue, brightness 0-255) from service data or state attributes; None where absent."""
+    hue = None
+    hs = data.get("hs_color")
+    rgb = data.get("rgb_color")
+    if hs:
+        hue = float(hs[0])
+    elif rgb:
+        hue = colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))[0] * 360.0
+    b = data.get("brightness")
+    return hue, (float(b) if b is not None else None)
 
 
 def rate_cap_for(hass: HomeAssistant, entity_id: str) -> float:
@@ -80,6 +104,8 @@ class Slot:
     ewma: float | None = None
     in_flight: bool = False
     last_sent: tuple | None = None
+    sent_hue: float | None = None
+    sent_bright: float | None = None
     task: asyncio.Task | None = None
     sent: int = 0
     skipped: int = 0
@@ -148,6 +174,7 @@ class Engine:
         self._ctx_set: set[str] = set()
         self._unsub: Callable[[], None] | None = None
         self._last_warn = -WARN_INTERVAL
+        self._info_last: dict[str, float] = {}
         self._diag_t0 = self._clock()
 
     # ------------------------------------------------------------------
@@ -239,6 +266,7 @@ class Engine:
     def _reset_sent(self) -> None:
         for s in self.slots.values():
             s.last_sent = None
+            s.sent_hue = s.sent_bright = None
 
     # ------------------------------------------------------------------
     # Commands from the virtual light
@@ -368,6 +396,7 @@ class Engine:
         recovered = _gone(old)
         if recovered:
             slot.last_sent = None  # a returning light has lost our colour: resend
+            slot.sent_hue = slot.sent_bright = None
         if not self.active:
             return
         ctx = new.context
@@ -375,13 +404,21 @@ class Engine:
             # Integration-originated recovery (empty context) or our own echo: carry on.
             if self.is_ours(ctx) or not _has_origin(ctx):
                 return
+            rule = "recovery_with_origin"
         elif new.state == STATE_OFF and old.state != STATE_OFF:
             # While active the engine never turns the primary off, so ANY transition to off is
             # someone else, whatever the context (HA reuses a context for ~5 s after our commands).
-            pass
+            rule = "off"
         elif self.is_ours(ctx):
             return
-        _LOGGER.debug("Primary %s changed from outside; pausing", self.primary_id)
+        elif _has_origin(ctx):
+            rule = "origin"
+        else:
+            # An empty context is not evidence of a human (device pushes, rounded echoes).
+            rule = self._deviation(slot, new)
+            if rule is None:
+                return
+        self._log_decision("Pausing", self.primary_id, rule, new, slot)
         self.paused = True
         self._sync_tasks()
         self.on_change()
@@ -395,6 +432,7 @@ class Engine:
         slot.unavailable = False
         if recovered:
             slot.last_sent = None  # a returning light has lost our colour: resend
+            slot.sent_hue = slot.sent_bright = None
         if not self.on:
             return
         # The engine only ever sends hs/rgb: a follower that BECOMES colour-temp/white/brightness-only
@@ -405,7 +443,7 @@ class Engine:
             and mode in NON_COLOUR_MODES
             and (old is None or old.attributes.get("color_mode") != mode)
         ):
-            self._release(eid)
+            self._release(eid, "colour_mode", new)
             return
         ctx = new.context
         if self.is_ours(ctx):
@@ -418,10 +456,47 @@ class Engine:
                 slot.last_sent = None
                 self.on_change()
             return
-        self._release(eid)
+        if _has_origin(ctx):
+            self._release(eid, "origin", new)
+        elif new.state == STATE_OFF:
+            self._release(eid, "off", new)
+        else:
+            rule = self._deviation(slot, new)
+            if rule is not None:
+                self._release(eid, rule, new)
 
-    def _release(self, eid: str) -> None:
+    def _deviation(self, slot: Slot, new) -> str | None:
+        """Rule name if ``new`` moved materially away from what we last sent, else None."""
+        hue, bright = _hue_bright(new.attributes)
+        if hue is not None and slot.sent_hue is not None:
+            if _hue_diff(hue, slot.sent_hue) > HUE_TOLERANCE:
+                return "hue_deviation"
+        if bright is not None and slot.sent_bright is not None:
+            if abs(bright - slot.sent_bright) > BRIGHTNESS_TOLERANCE:
+                return "brightness_deviation"
+        return None
+
+    def _log_decision(self, action: str, eid: str, rule: str, new, slot: Slot) -> None:
+        """Debug always; info at most once per light per 10 min (these lights are not in the recorder)."""
+        hue, bright = _hue_bright(new.attributes)
+        ctx = new.context
+        msg = (
+            "%s %s: rule=%s context(user_id=%s parent_id=%s ours=%s) state=%s "
+            "sent(hue=%s bright=%s) reported(hue=%s bright=%s)"
+        )
+        args = (
+            action, eid, rule, ctx.user_id, ctx.parent_id, self.is_ours(ctx), new.state,
+            slot.sent_hue, slot.sent_bright, hue, bright,
+        )
+        _LOGGER.debug(msg, *args)
+        now = self._clock()
+        if now - self._info_last.get(eid, -INFO_INTERVAL) >= INFO_INTERVAL:
+            self._info_last[eid] = now
+            _LOGGER.info(msg, *args)
+
+    def _release(self, eid: str, rule: str, new) -> None:
         if eid not in self.released:
+            self._log_decision("Releasing", eid, rule, new, self.slots[eid])
             self.released.add(eid)
             self.on_change()
 
@@ -458,7 +533,8 @@ class Engine:
         state = self.hass.states.get(slot.entity_id)
         modes = (state.attributes.get("supported_color_modes") if state else None) or []
         if "hs" in modes:
-            hs = (round(hue, 1), 100.0)
+            # Integer hue/saturation: the device reports back exactly what we sent.
+            hs = (round(hue) % 360, 100)
             data.update(hs_color=list(hs), brightness=b)
             return data, (hs, b)
         rgb = hue_to_rgb(hue)
@@ -482,6 +558,7 @@ class Engine:
         if key == slot.last_sent:
             return
         ctx = self.new_context()
+        slot.sent_hue, slot.sent_bright = _hue_bright(data)  # before the await: echoes land during it
         slot.in_flight = True
         t0 = self._clock()
         try:
@@ -512,8 +589,12 @@ class Engine:
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
+    def capacity_rates(self) -> dict[str, float]:
+        """Effective steps/s each light can take (min of cap and measured capacity), 0.1 resolution."""
+        return {s.entity_id: round(s.rate, 1) for s in self.slots.values()}
+
     def measure_rates(self) -> dict[str, float]:
-        """Measured steps/s per light since the previous call (rounded to 0.5)."""
+        """Measured SENT steps/s per light since the previous call (rounded to 0.5); idle time counts."""
         now = self._clock()
         out: dict[str, float] = {}
         for s in self.slots.values():
