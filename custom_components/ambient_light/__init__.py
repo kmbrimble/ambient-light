@@ -15,6 +15,8 @@ from homeassistant.helpers.typing import ConfigType
 from .const import (
     ATTR_BRIGHTNESS_PCT,
     ATTR_TRANSITION,
+    CONF_BLEND,
+    DEFAULTS,
     DOMAIN,
     HOOKS,
     SERVICE_SET_BRIGHTNESS,
@@ -30,7 +32,7 @@ SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
     }
 )
 
-PLATFORMS = [Platform.LIGHT]
+PLATFORMS = [Platform.LIGHT, Platform.SELECT]
 
 type AmbientConfigEntry = ConfigEntry[Engine]
 
@@ -78,7 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AmbientConfigEntry) -> b
         run_senders=hooks.get("run_senders", True),
         create_task=lambda coro, name: entry.async_create_background_task(hass, coro, name),
     )
-    entry.async_on_unload(entry.add_update_listener(_async_reload))
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -91,6 +93,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: AmbientConfigEntry) -> 
     return ok
 
 
-async def _async_reload(hass: HomeAssistant, entry: AmbientConfigEntry) -> None:
-    """Options changed: reload."""
-    await hass.config_entries.async_reload(entry.entry_id)
+async def _async_options_updated(hass: HomeAssistant, entry: AmbientConfigEntry) -> None:
+    """Options changed: reload, unless only the blend changed (that applies live)."""
+    engine = entry.runtime_data
+    if engine.options_changed(dict(entry.options)):
+        await hass.config_entries.async_reload(entry.entry_id)
+    else:
+        engine.set_blend(entry.options.get(CONF_BLEND, DEFAULTS[CONF_BLEND]))

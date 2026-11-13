@@ -16,6 +16,9 @@ example `light.living_room_ambient`), the primary light, optional follower light
 has its own brightness scale and Rainbow phase offset. Use **Configure** on the entry to change anything later.
 
 - **Effects:** Random, Drift and Rainbow, selectable on the virtual light.
+- **Blend:** how Random and Drift move between colours. `Wheel` (default) sweeps the hue round the colour wheel; `OKLab` blends in
+  a straight, perceptually even line with no detour through other hues. Switch any time with the **Blend** select entity
+  (`select.<name>_blend`) or in the settings. Rainbow always uses the wheel.
 - **Pause:** if something else changes or turns off the primary light, the cycle pauses. Turn the virtual light on to resume.
 - **Service:** `ambient_light.set_brightness` changes the brightness target without turning the light on or resuming a pause.
 

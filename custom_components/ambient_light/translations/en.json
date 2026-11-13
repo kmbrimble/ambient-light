@@ -15,6 +15,7 @@
         "description": "{warning}",
         "data": {
           "mode": "Default mode",
+          "blend": "Colour blend",
           "interval": "Interval (Random and Drift)",
           "hue_speed": "Hue speed",
           "max_step": "Maximum step",
@@ -27,9 +28,10 @@
         },
         "data_description": {
           "mode": "The effect used when the light is turned on without one.",
+          "blend": "How Random and Drift colour changes are blended. Wheel sweeps the hue round the colour wheel; OKLab blends in a straight line in OKLab, with no detour through other hues. Rainbow always uses the wheel. A fade already under way finishes the way it started.",
           "interval": "Seconds between new colour picks.",
           "hue_speed": "How fast the hue moves, in degrees per second.",
-          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap.",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap, and for OKLab the change on any colour channel (step × 255 / 60).",
           "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
           "min_jump": "Smallest Drift hue change, in degrees.",
           "max_jump": "Largest Drift hue change, in degrees.",
@@ -73,6 +75,7 @@
         "description": "{warning}",
         "data": {
           "mode": "Default mode",
+          "blend": "Colour blend",
           "interval": "Interval (Random and Drift)",
           "hue_speed": "Hue speed",
           "max_step": "Maximum step",
@@ -85,9 +88,10 @@
         },
         "data_description": {
           "mode": "The effect used when the light is turned on without one.",
+          "blend": "How Random and Drift colour changes are blended. Wheel sweeps the hue round the colour wheel; OKLab blends in a straight line in OKLab, with no detour through other hues. Rainbow always uses the wheel. A fade already under way finishes the way it started.",
           "interval": "Seconds between new colour picks.",
           "hue_speed": "How fast the hue moves, in degrees per second.",
-          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap.",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the hue speed and the shortest Rainbow lap, and for OKLab the change on any colour channel (step × 255 / 60).",
           "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
           "min_jump": "Smallest Drift hue change, in degrees.",
           "max_jump": "Largest Drift hue change, in degrees.",
@@ -121,6 +125,12 @@
         "random": "Random",
         "drift": "Drift",
         "rainbow": "Rainbow"
+      }
+    },
+    "blend": {
+      "options": {
+        "wheel": "Wheel",
+        "oklab": "OKLab"
       }
     }
   },

@@ -83,6 +83,7 @@ class AmbientLight(LightEntity, RestoreEntity):
             "adopted_followers": e.adopted,
             "released_followers": sorted(e.released),
             "mode": e.mode,
+            "blend": e.blend,
             "brightness_target_pct": round(e.brightness_target_pct),
             **self._diag,
         }
@@ -107,7 +108,7 @@ class AmbientLight(LightEntity, RestoreEntity):
         if (last := await self.async_get_last_extra_data()) is not None:
             self._engine.apply_restored(last.as_dict())
         self._diag = self._snapshot_diag()
-        self._engine.on_change = self._on_engine_change
+        self.async_on_remove(self._engine.add_listener(self._on_engine_change))
         self.async_on_remove(async_at_started(self.hass, self._at_started))
         self.async_on_remove(
             async_track_time_interval(self.hass, self._minute, DIAG_INTERVAL)

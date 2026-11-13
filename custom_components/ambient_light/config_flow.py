@@ -15,6 +15,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_BLEND,
     CONF_BRIGHTNESS_FADE,
     CONF_FIXED_FADE,
     CONF_FOLLOWER_SETTINGS,
@@ -33,6 +34,7 @@ from .const import (
     CONF_SCALE,
     DEFAULTS,
     DOMAIN,
+    BLENDS,
     MAX_STEP_WARN,
     MODES,
 )
@@ -40,6 +42,7 @@ from .engine import rate_cap_for
 
 SETTING_KEYS = [
     CONF_MODE,
+    CONF_BLEND,
     CONF_INTERVAL,
     CONF_HUE_SPEED,
     CONF_MAX_STEP,
@@ -72,6 +75,11 @@ def settings_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_MODE, default=d(CONF_MODE)): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=MODES, translation_key="mode", mode=selector.SelectSelectorMode.DROPDOWN
+                )
+            ),
+            vol.Required(CONF_BLEND, default=d(CONF_BLEND)): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=BLENDS, translation_key="blend", mode=selector.SelectSelectorMode.DROPDOWN
                 )
             ),
             vol.Required(CONF_INTERVAL, default=d(CONF_INTERVAL)): _num(1, 3600, 1, "s"),

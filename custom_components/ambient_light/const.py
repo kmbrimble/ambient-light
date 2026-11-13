@@ -28,6 +28,14 @@ CONF_MAX_JUMP = "max_jump"
 CONF_MOMENTUM = "momentum"
 CONF_RAINBOW_LAP = "rainbow_lap"
 CONF_BRIGHTNESS_FADE = "brightness_fade"
+CONF_BLEND = "blend"
+
+BLEND_WHEEL = "wheel"
+BLEND_OKLAB = "oklab"
+BLENDS = [BLEND_WHEEL, BLEND_OKLAB]
+# Labels of the blend select entity (the option values users pick in the UI and in automations).
+BLEND_LABELS = {BLEND_WHEEL: "Wheel", BLEND_OKLAB: "OKLab"}
+BLEND_BY_LABEL = {v: k for k, v in BLEND_LABELS.items()}
 
 DEFAULTS = {
     CONF_MODE: MODE_RANDOM,
@@ -40,6 +48,7 @@ DEFAULTS = {
     CONF_MOMENTUM: 0.7,
     CONF_RAINBOW_LAP: 120.0,
     CONF_BRIGHTNESS_FADE: 60.0,
+    CONF_BLEND: BLEND_WHEEL,
 }
 
 # Maximum commands per second per light, by platform of the entity.

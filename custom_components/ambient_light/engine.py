@@ -21,11 +21,15 @@ from .colour import (
     BrightnessFade,
     ColourClock,
     Settings,
+    Rgb,
     brightness_255,
-    hue_to_rgb,
+    hue_to_rgb_float,
     min_rainbow_lap,
+    rgb_to_hs_v,
 )
 from .const import (
+    BLENDS,
+    CONF_BLEND,
     CONF_FOLLOWER_SETTINGS,
     CONF_FOLLOWERS,
     CONF_MODE,
@@ -48,7 +52,10 @@ CONTEXT_MEMORY = 512
 INFO_INTERVAL = 600.0
 # An empty-context change counts as someone else only if it moves this far from what we last sent.
 # Anything smaller is rounding or an echo (tuya_local rewrites state from the device's own report).
-HUE_TOLERANCE = 12.0
+# Colour is compared hue-agnostically (hue is unstable at low saturation): the largest difference on any
+# channel of the two colours scaled to full value. 12 degrees of hue at full saturation moves the fastest
+# channel by 12 x 255/60 = 51, so saturated colours keep the old 12 degree tolerance.
+COLOUR_TOLERANCE = 12.0 * 255.0 / 60.0
 BRIGHTNESS_TOLERANCE = 0.15 * 255
 
 
@@ -66,22 +73,32 @@ def _has_origin(ctx) -> bool:
     return bool(ctx.user_id or ctx.parent_id)
 
 
-def _hue_diff(a: float, b: float) -> float:
-    d = abs(a - b) % 360.0
-    return min(d, 360.0 - d)
+def _chroma_bright(data) -> tuple[Rgb | None, float, float | None]:
+    """(colour at full value, value 0-1, brightness 0-255) from service data or state attributes.
 
-
-def _hue_bright(data) -> tuple[float | None, float | None]:
-    """(hue, brightness 0-255) from service data or state attributes; None where absent."""
-    hue = None
+    The colour is hs_color if present, else rgb_color, scaled so its largest channel is 255. The value is
+    the largest channel of rgb_color / 255 (1 when only hs is given): a light that reports raw rgb and one
+    that folds the dimming into brightness then give the same ``brightness x value``. None where absent.
+    """
     hs = data.get("hs_color")
     rgb = data.get("rgb_color")
+    colour: Rgb | None = None
     if hs:
-        hue = float(hs[0])
-    elif rgb:
-        hue = colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))[0] * 360.0
+        colour = tuple(c * 255.0 for c in colorsys.hsv_to_rgb(float(hs[0]) / 360.0, float(hs[1]) / 100.0, 1.0))
+    elif rgb and max(rgb) > 0:
+        top = float(max(rgb))
+        colour = tuple(c * 255.0 / top for c in rgb)
+    value = max(rgb) / 255.0 if rgb and max(rgb) > 0 else 1.0
     b = data.get("brightness")
-    return hue, (float(b) if b is not None else None)
+    return colour, value, (float(b) if b is not None else None)
+
+
+def _colour_diff(a: Rgb, b: Rgb) -> float:
+    return max(abs(x - y) for x, y in zip(a, b))
+
+
+def _r(x: float | None) -> float | None:
+    return None if x is None else round(x, 1)
 
 
 def rate_cap_for(hass: HomeAssistant, entity_id: str) -> float:
@@ -104,7 +121,8 @@ class Slot:
     ewma: float | None = None
     in_flight: bool = False
     last_sent: tuple | None = None
-    sent_hue: float | None = None
+    sent_colour: Rgb | None = None  # colour last sent, scaled to full value
+    sent_value: float = 1.0  # its value (max channel / 255) for rgb commands
     sent_bright: float | None = None
     task: asyncio.Task | None = None
     sent: int = 0
@@ -113,6 +131,15 @@ class Slot:
     win_n: int = 0
     last_rate: float = 0.0
     unavailable: bool = False
+
+    @property
+    def sent_hue(self) -> float | None:
+        """Hue of the colour last sent (for logs and tests; unstable at low saturation)."""
+        return None if self.sent_colour is None else rgb_to_hs_v(self.sent_colour)[0]
+
+    @property
+    def sent_sat(self) -> float | None:
+        return None if self.sent_colour is None else rgb_to_hs_v(self.sent_colour)[1]
 
     @property
     def rate(self) -> float:
@@ -142,6 +169,8 @@ class Engine:
             lambda coro, name: hass.async_create_background_task(coro, name)
         )
         self.settings = Settings.from_options(options)
+        # Options the engine was built from, less the blend: a change to anything else needs a reload.
+        self._base_options = {k: v for k, v in options.items() if k != CONF_BLEND}
         self.default_mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
         self.colour = ColourClock(self.settings, rng)
         self.bright = BrightnessFade(100.0)
@@ -169,13 +198,22 @@ class Engine:
         self.started = False
         self.primary_unavailable_count = 0
         self.failed_command_count = 0
-        self.on_change: Callable[[], None] = lambda: None
+        self._listeners: list[Callable[[], None]] = []
         self._ctx_ids: deque[str] = deque(maxlen=CONTEXT_MEMORY)
         self._ctx_set: set[str] = set()
         self._unsub: Callable[[], None] | None = None
         self._last_warn = -WARN_INTERVAL
         self._info_last: dict[str, float] = {}
         self._diag_t0 = self._clock()
+
+    def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Call ``listener`` after any change of engine state; returns the unsubscribe function."""
+        self._listeners.append(listener)
+        return lambda: self._listeners.remove(listener) if listener in self._listeners else None
+
+    def on_change(self) -> None:
+        for listener in list(self._listeners):
+            listener()
 
     # ------------------------------------------------------------------
     # Context bookkeeping
@@ -199,6 +237,22 @@ class Engine:
     @property
     def primary_rate(self) -> float:
         return self.slots[self.primary_id].rate
+
+    @property
+    def blend(self) -> str:
+        return self.settings.blend
+
+    def set_blend(self, blend: str) -> None:
+        """Change the blend live. Fades already under way finish as planned; the next one uses it."""
+        if blend not in BLENDS:
+            raise ValueError(f"unknown blend {blend}")
+        if blend != self.settings.blend:
+            self.settings.blend = blend
+            self.on_change()
+
+    def options_changed(self, options: dict[str, Any]) -> bool:
+        """True if ``options`` differ from the engine's in anything but the blend (needs a reload)."""
+        return {k: v for k, v in options.items() if k != CONF_BLEND} != self._base_options
 
     @property
     def adopted(self) -> list[str]:
@@ -266,7 +320,7 @@ class Engine:
     def _reset_sent(self) -> None:
         for s in self.slots.values():
             s.last_sent = None
-            s.sent_hue = s.sent_bright = None
+            s.sent_colour = s.sent_bright = None
 
     # ------------------------------------------------------------------
     # Commands from the virtual light
@@ -396,7 +450,7 @@ class Engine:
         recovered = _gone(old)
         if recovered:
             slot.last_sent = None  # a returning light has lost our colour: resend
-            slot.sent_hue = slot.sent_bright = None
+            slot.sent_colour = slot.sent_bright = None
         if not self.active:
             return
         ctx = new.context
@@ -432,7 +486,7 @@ class Engine:
         slot.unavailable = False
         if recovered:
             slot.last_sent = None  # a returning light has lost our colour: resend
-            slot.sent_hue = slot.sent_bright = None
+            slot.sent_colour = slot.sent_bright = None
         if not self.on:
             return
         # The engine only ever sends hs/rgb: a follower that BECOMES colour-temp/white/brightness-only
@@ -467,26 +521,27 @@ class Engine:
 
     def _deviation(self, slot: Slot, new) -> str | None:
         """Rule name if ``new`` moved materially away from what we last sent, else None."""
-        hue, bright = _hue_bright(new.attributes)
-        if hue is not None and slot.sent_hue is not None:
-            if _hue_diff(hue, slot.sent_hue) > HUE_TOLERANCE:
-                return "hue_deviation"
+        colour, value, bright = _chroma_bright(new.attributes)
+        if colour is not None and slot.sent_colour is not None:
+            if _colour_diff(colour, slot.sent_colour) > COLOUR_TOLERANCE:
+                return "colour_deviation"
         if bright is not None and slot.sent_bright is not None:
-            if abs(bright - slot.sent_bright) > BRIGHTNESS_TOLERANCE:
+            if abs(bright * value - slot.sent_bright * slot.sent_value) > BRIGHTNESS_TOLERANCE:
                 return "brightness_deviation"
         return None
 
     def _log_decision(self, action: str, eid: str, rule: str, new, slot: Slot) -> None:
         """Debug always; info at most once per light per 10 min (these lights are not in the recorder)."""
-        hue, bright = _hue_bright(new.attributes)
+        colour, _value, bright = _chroma_bright(new.attributes)
+        hs = rgb_to_hs_v(colour) if colour is not None else (None, None, None)
         ctx = new.context
         msg = (
             "%s %s: rule=%s context(user_id=%s parent_id=%s ours=%s) state=%s "
-            "sent(hue=%s bright=%s) reported(hue=%s bright=%s)"
+            "sent(hue=%s sat=%s bright=%s) reported(hue=%s sat=%s bright=%s)"
         )
         args = (
             action, eid, rule, ctx.user_id, ctx.parent_id, self.is_ours(ctx), new.state,
-            slot.sent_hue, slot.sent_bright, hue, bright,
+            _r(slot.sent_hue), _r(slot.sent_sat), slot.sent_bright, _r(hs[0]), _r(hs[1]), bright,
         )
         _LOGGER.debug(msg, *args)
         now = self._clock()
@@ -520,26 +575,31 @@ class Engine:
 
     def build_command(self, slot: Slot, now: float) -> tuple[dict[str, Any], tuple]:
         """Service data and a comparable key for a light at time ``now``."""
-        hue = self.colour.hue_at(now, self.primary_rate)
+        rgb = self.colour.rgb_at(now, self.primary_rate)
         b = brightness_255(self.bright.value_at(now))
         data: dict[str, Any] = {"entity_id": slot.entity_id}
         if slot.primary:
-            rgb = hue_to_rgb(hue)
-            data.update(rgb_color=list(rgb), brightness=b)
-            return data, (rgb, b)
-        if self.mode == MODE_RAINBOW:
-            hue = (hue + slot.offset) % 360.0
-        b = max(1, round(b * slot.scale))
+            ints = tuple(round(c) for c in rgb)
+            data.update(rgb_color=list(ints), brightness=b)
+            return data, (ints, b)
         state = self.hass.states.get(slot.entity_id)
         modes = (state.attributes.get("supported_color_modes") if state else None) or []
+        if self.mode == MODE_RAINBOW:
+            # Rainbow always rides the wheel; followers may be phase-offset.
+            hue = (self.colour.current(now) + slot.offset) % 360.0
+            rgb = hue_to_rgb_float(hue)
         if "hs" in modes:
-            # Integer hue/saturation: the device reports back exactly what we sent.
-            hs = (round(hue) % 360, 100)
+            # Integer hue/saturation: the device reports back exactly what was sent. hs has no value, so
+            # the colour's value (below 1 for a mid-blend colour) goes into the brightness instead.
+            h, sat, v = rgb_to_hs_v(rgb)
+            hs = (round(h) % 360, round(sat))
+            b = max(1, round(b * slot.scale * v))
             data.update(hs_color=list(hs), brightness=b)
             return data, (hs, b)
-        rgb = hue_to_rgb(hue)
-        data.update(rgb_color=list(rgb), brightness=b)
-        return data, (rgb, b)
+        b = max(1, round(b * slot.scale))
+        ints = tuple(round(c) for c in rgb)
+        data.update(rgb_color=list(ints), brightness=b)
+        return data, (ints, b)
 
     async def async_tick(self, slot: Slot) -> None:
         """Sample the shared clock and send ONE command, or skip. Never queues."""
@@ -558,7 +618,7 @@ class Engine:
         if key == slot.last_sent:
             return
         ctx = self.new_context()
-        slot.sent_hue, slot.sent_bright = _hue_bright(data)  # before the await: echoes land during it
+        slot.sent_colour, slot.sent_value, slot.sent_bright = _chroma_bright(data)  # before the await: echoes land during it
         slot.in_flight = True
         t0 = self._clock()
         try:
