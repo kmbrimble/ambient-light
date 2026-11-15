@@ -31,15 +31,20 @@ from .const import (
     BLENDS,
     CONF_BLEND,
     CONF_FOLLOWER_SETTINGS,
+    CONF_FOLLOWER_RATE_CAP,
     CONF_FOLLOWERS,
     CONF_MODE,
     CONF_OFFSET,
     CONF_PRIMARY,
+    CONF_PRIMARY_RATE_CAP,
     CONF_SCALE,
     DEFAULTS,
+    LIVE_OPTIONS,
     MODE_RAINBOW,
     MODES,
     RATE_CAP_DEFAULT,
+    RATE_CAP_MAX,
+    RATE_CAP_MIN,
     SLOW_PLATFORMS,
 )
 
@@ -109,6 +114,15 @@ def rate_cap_for(hass: HomeAssistant, entity_id: str) -> float:
     return RATE_CAP_DEFAULT
 
 
+def resolve_cap(hass: HomeAssistant, entity_id: str, configured: Any) -> float:
+    """The command-rate cap for an entity: the configured value (clamped to range), else the platform default."""
+    try:
+        value = float(configured)
+    except (TypeError, ValueError):
+        return rate_cap_for(hass, entity_id)
+    return min(RATE_CAP_MAX, max(RATE_CAP_MIN, value))
+
+
 @dataclass(eq=False)
 class Slot:
     """Per-light sender state."""
@@ -169,8 +183,9 @@ class Engine:
             lambda coro, name: hass.async_create_background_task(coro, name)
         )
         self.settings = Settings.from_options(options)
-        # Options the engine was built from, less the blend: a change to anything else needs a reload.
-        self._base_options = {k: v for k, v in options.items() if k != CONF_BLEND}
+        # Options the engine was built from, less the live ones (blend, rate caps): a change to anything
+        # else needs a reload.
+        self._base_options = self._reload_options(options)
         self.default_mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
         self.colour = ColourClock(self.settings, rng)
         self.bright = BrightnessFade(100.0)
@@ -178,14 +193,18 @@ class Engine:
         self.primary_id: str = options[CONF_PRIMARY]
         fsettings = options.get(CONF_FOLLOWER_SETTINGS, {})
         self.slots: dict[str, Slot] = {
-            self.primary_id: Slot(self.primary_id, True, rate_cap_for(hass, self.primary_id))
+            self.primary_id: Slot(
+                self.primary_id,
+                True,
+                resolve_cap(hass, self.primary_id, options.get(CONF_PRIMARY_RATE_CAP)),
+            )
         }
         for eid in options.get(CONF_FOLLOWERS, []):
             fs = fsettings.get(eid, {})
             self.slots[eid] = Slot(
                 eid,
                 False,
-                rate_cap_for(hass, eid),
+                resolve_cap(hass, eid, options.get(CONF_FOLLOWER_RATE_CAP)),
                 scale=float(fs.get(CONF_SCALE, 1.0)),
                 offset=float(fs.get(CONF_OFFSET, 0.0)),
             )
@@ -242,17 +261,63 @@ class Engine:
     def blend(self) -> str:
         return self.settings.blend
 
-    def set_blend(self, blend: str) -> None:
+    def set_blend(self, blend: str, notify: bool = True) -> None:
         """Change the blend live. Fades already under way finish as planned; the next one uses it."""
         if blend not in BLENDS:
             raise ValueError(f"unknown blend {blend}")
         if blend != self.settings.blend:
             self.settings.blend = blend
-            self.on_change()
+            if notify:
+                self.on_change()
+
+    @staticmethod
+    def _reload_options(options: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in options.items() if k not in LIVE_OPTIONS}
 
     def options_changed(self, options: dict[str, Any]) -> bool:
-        """True if ``options`` differ from the engine's in anything but the blend (needs a reload)."""
-        return {k: v for k, v in options.items() if k != CONF_BLEND} != self._base_options
+        """True if ``options`` differ from the engine's in anything but the live ones (needs a reload)."""
+        return self._reload_options(options) != self._base_options
+
+    def apply_options(self, options: dict[str, Any]) -> None:
+        """Apply the live options (blend, rate caps). Callers have checked ``options_changed`` is False.
+
+        Everything derived from a slot's rate (effective rate, Rainbow minimum lap, the wheel speed cap,
+        OKLab fade durations, the sender cadence) reads ``slot.rate``. Rainbow and the cadence follow at once; a
+        Random/Drift fade keeps the duration planned at its pick, and the next pick uses the new rate.
+        """
+        self.set_blend(options.get(CONF_BLEND, DEFAULTS[CONF_BLEND]), notify=False)
+        for slot in self.slots.values():
+            key = CONF_PRIMARY_RATE_CAP if slot.primary else CONF_FOLLOWER_RATE_CAP
+            slot.cap = resolve_cap(self.hass, slot.entity_id, options.get(key))
+        self.on_change()
+
+    def rate_caps(self) -> dict[str, float]:
+        """The configured (or platform default) command-rate cap per light."""
+        return {s.entity_id: s.cap for s in self.slots.values()}
+
+    def readopt_followers(self, only_off: bool = True) -> list[str]:
+        """Move released followers back to adopted; returns those moved.
+
+        With ``only_off`` only followers currently ``off`` qualify (unavailable, unknown and on ones are
+        left alone); otherwise every released follower does. Never turns the light on or resumes a pause:
+        if the cycle is running they are sent the current colour on the next tick, else they are simply
+        adopted for when it runs.
+        """
+        moved = []
+        for eid in sorted(self.released):
+            if only_off:
+                state = self.hass.states.get(eid)
+                if state is None or state.state != STATE_OFF:
+                    continue
+            moved.append(eid)
+        for eid in moved:
+            self.released.discard(eid)
+            slot = self.slots[eid]
+            slot.last_sent = None  # resend even if the colour has not changed
+            slot.sent_colour = slot.sent_bright = None
+        if moved:
+            self.on_change()
+        return moved
 
     @property
     def adopted(self) -> list[str]:

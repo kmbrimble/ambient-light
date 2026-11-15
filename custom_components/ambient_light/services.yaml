@@ -20,3 +20,15 @@ set_brightness:
           max: 3600
           step: 1
           unit_of_measurement: s
+
+readopt_followers:
+  target:
+    entity:
+      integration: ambient_light
+      domain: light
+  fields:
+    only_off:
+      required: false
+      default: true
+      selector:
+        boolean:

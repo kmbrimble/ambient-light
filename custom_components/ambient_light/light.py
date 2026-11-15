@@ -84,6 +84,7 @@ class AmbientLight(LightEntity, RestoreEntity):
             "released_followers": sorted(e.released),
             "mode": e.mode,
             "blend": e.blend,
+            "rate_cap": e.rate_caps(),
             "brightness_target_pct": round(e.brightness_target_pct),
             **self._diag,
         }

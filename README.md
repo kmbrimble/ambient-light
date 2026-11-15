@@ -20,5 +20,11 @@ has its own brightness scale and Rainbow phase offset. Use **Configure** on the 
   a straight, perceptually even line with no detour through other hues. Switch any time with the **Blend** select entity
   (`select.<name>_blend`) or in the settings. Rainbow always uses the wheel.
 - **Pause:** if something else changes or turns off the primary light, the cycle pauses. Turn the virtual light on to resume.
-- **Service:** `ambient_light.set_brightness` changes the brightness target without turning the light on or resuming a pause.
+- **Command rate caps:** `primary_rate_cap` and `follower_rate_cap` (commands per second, 0.5 to 10) limit how fast
+  commands are sent. The defaults suit most lights; lower the primary cap if a light drops offline during a cycle. Fades get
+  slower, steps stay smooth, and changes apply without a reload. The configured caps show in the light's `rate_cap` attribute.
+- **Services:**
+  - `ambient_light.set_brightness` changes the brightness target without turning the light on or resuming a pause.
+  - `ambient_light.readopt_followers` (`only_off`, default true) puts released followers back under the cycle's control,
+    only those currently off by default. It never turns the light on or resumes a pause.
 

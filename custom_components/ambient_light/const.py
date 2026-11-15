@@ -29,6 +29,8 @@ CONF_MOMENTUM = "momentum"
 CONF_RAINBOW_LAP = "rainbow_lap"
 CONF_BRIGHTNESS_FADE = "brightness_fade"
 CONF_BLEND = "blend"
+CONF_PRIMARY_RATE_CAP = "primary_rate_cap"
+CONF_FOLLOWER_RATE_CAP = "follower_rate_cap"
 
 BLEND_WHEEL = "wheel"
 BLEND_OKLAB = "oklab"
@@ -55,11 +57,19 @@ DEFAULTS = {
 RATE_CAP_SLOW = 4.0
 RATE_CAP_DEFAULT = 10.0
 SLOW_PLATFORMS = {"meross_lan": RATE_CAP_SLOW}
+# Range of the configurable cap (commands per second).
+RATE_CAP_MIN = 0.5
+RATE_CAP_MAX = 10.0
+RATE_CAP_STEP = 0.5
+# Options that apply live (no reload): the blend and the rate caps.
+LIVE_OPTIONS = (CONF_BLEND, CONF_PRIMARY_RATE_CAP, CONF_FOLLOWER_RATE_CAP)
 
 # Per-step hue size above which the UI warns (degrees).
 MAX_STEP_WARN = 4.0
 
 SERVICE_SET_BRIGHTNESS = "set_brightness"
+SERVICE_READOPT_FOLLOWERS = "readopt_followers"
+ATTR_ONLY_OFF = "only_off"
 ATTR_BRIGHTNESS_PCT = "brightness_pct"
 ATTR_TRANSITION = "transition"
 

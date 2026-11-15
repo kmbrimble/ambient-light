@@ -14,11 +14,11 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     ATTR_BRIGHTNESS_PCT,
+    ATTR_ONLY_OFF,
     ATTR_TRANSITION,
-    CONF_BLEND,
-    DEFAULTS,
     DOMAIN,
     HOOKS,
+    SERVICE_READOPT_FOLLOWERS,
     SERVICE_SET_BRIGHTNESS,
 )
 from .engine import Engine
@@ -32,19 +32,21 @@ SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
     }
 )
 
+READOPT_SCHEMA = cv.make_entity_service_schema({vol.Optional(ATTR_ONLY_OFF, default=True): cv.boolean})
+
 PLATFORMS = [Platform.LIGHT, Platform.SELECT]
 
 type AmbientConfigEntry = ConfigEntry[Engine]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the service at component level, before any entity exists.
+    """Register the services at component level, before any entity exists.
 
     Registering it from the light platform (after the entity is added) lets an automation that
     fires on the entity's first state write run before the service exists.
     """
 
-    async def _set_brightness(call: ServiceCall) -> None:
+    async def _engines(call: ServiceCall) -> list[Engine]:
         registry = er.async_get(hass)
         engines: list[Engine] = []
         for entity_id in sorted(await async_extract_entity_ids(call)):
@@ -59,12 +61,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             engines.append(entry.runtime_data)
         if not engines:
             raise ServiceValidationError("No ambient light targeted")
+        return engines
+
+    async def _set_brightness(call: ServiceCall) -> None:
+        engines = await _engines(call)
         transition = call.data.get(ATTR_TRANSITION)
         for engine in engines:
             engine.set_brightness(max(1.0, call.data[ATTR_BRIGHTNESS_PCT]), transition)
 
+    async def _readopt_followers(call: ServiceCall) -> None:
+        for engine in await _engines(call):
+            engine.readopt_followers(call.data[ATTR_ONLY_OFF])
+
     hass.services.async_register(
         DOMAIN, SERVICE_SET_BRIGHTNESS, _set_brightness, schema=SET_BRIGHTNESS_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_READOPT_FOLLOWERS, _readopt_followers, schema=READOPT_SCHEMA
     )
     return True
 
@@ -94,9 +107,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: AmbientConfigEntry) -> 
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: AmbientConfigEntry) -> None:
-    """Options changed: reload, unless only the blend changed (that applies live)."""
+    """Options changed: reload, unless only live options (blend, rate caps) changed."""
     engine = entry.runtime_data
     if engine.options_changed(dict(entry.options)):
         await hass.config_entries.async_reload(entry.entry_id)
     else:
-        engine.set_blend(entry.options.get(CONF_BLEND, DEFAULTS[CONF_BLEND]))
+        engine.apply_options(dict(entry.options))

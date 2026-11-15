@@ -24,7 +24,9 @@
           "max_jump": "Drift maximum jump",
           "momentum": "Drift momentum",
           "rainbow_lap": "Rainbow lap time",
-          "brightness_fade": "Brightness fade"
+          "brightness_fade": "Brightness fade",
+          "primary_rate_cap": "Primary command rate cap",
+          "follower_rate_cap": "Follower command rate cap"
         },
         "data_description": {
           "mode": "The effect used when the light is turned on without one.",
@@ -37,7 +39,9 @@
           "max_jump": "Largest Drift hue change, in degrees.",
           "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
           "rainbow_lap": "Seconds for one full Rainbow lap. Raised automatically if the lights cannot keep up.",
-          "brightness_fade": "Default seconds for a brightness change."
+          "brightness_fade": "Default seconds for a brightness change.",
+          "primary_rate_cap": "Most commands per second sent to the primary light (0.5 to 10). Defaults to the platform's rate (4 for meross_lan, otherwise 10). Lower it if the light drops offline while a cycle runs; fades just get slower, steps stay as smooth. Applies at once, no reload.",
+          "follower_rate_cap": "Most commands per second sent to each follower light (0.5 to 10). Leave empty for each light's platform default. Applies at once, no reload."
         }
       },
       "follower": {
@@ -84,7 +88,9 @@
           "max_jump": "Drift maximum jump",
           "momentum": "Drift momentum",
           "rainbow_lap": "Rainbow lap time",
-          "brightness_fade": "Brightness fade"
+          "brightness_fade": "Brightness fade",
+          "primary_rate_cap": "Primary command rate cap",
+          "follower_rate_cap": "Follower command rate cap"
         },
         "data_description": {
           "mode": "The effect used when the light is turned on without one.",
@@ -97,7 +103,9 @@
           "max_jump": "Largest Drift hue change, in degrees.",
           "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
           "rainbow_lap": "Seconds for one full Rainbow lap. Raised automatically if the lights cannot keep up.",
-          "brightness_fade": "Default seconds for a brightness change."
+          "brightness_fade": "Default seconds for a brightness change.",
+          "primary_rate_cap": "Most commands per second sent to the primary light (0.5 to 10). Defaults to the platform's rate (4 for meross_lan, otherwise 10). Lower it if the light drops offline while a cycle runs; fades just get slower, steps stay as smooth. Applies at once, no reload.",
+          "follower_rate_cap": "Most commands per second sent to each follower light (0.5 to 10). Leave empty for each light's platform default. Applies at once, no reload."
         }
       },
       "follower": {
@@ -146,6 +154,16 @@
         "transition": {
           "name": "Transition",
           "description": "Fade length in seconds. Defaults to the configured brightness fade."
+        }
+      }
+    },
+    "readopt_followers": {
+      "name": "Re-adopt followers",
+      "description": "Move released follower lights back under the cycle's control. Never turns the light on or resumes a paused cycle: if it is running they get the current colour on the next step, otherwise they are adopted for when it runs.",
+      "fields": {
+        "only_off": {
+          "name": "Only lights that are off",
+          "description": "Only re-adopt followers that are currently off (unavailable ones are skipped). Turn off to re-adopt every released follower."
         }
       }
     }

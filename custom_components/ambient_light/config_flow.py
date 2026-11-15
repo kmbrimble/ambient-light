@@ -18,6 +18,7 @@ from .const import (
     CONF_BLEND,
     CONF_BRIGHTNESS_FADE,
     CONF_FIXED_FADE,
+    CONF_FOLLOWER_RATE_CAP,
     CONF_FOLLOWER_SETTINGS,
     CONF_FOLLOWERS,
     CONF_HUE_SPEED,
@@ -30,6 +31,7 @@ from .const import (
     CONF_NAME,
     CONF_OFFSET,
     CONF_PRIMARY,
+    CONF_PRIMARY_RATE_CAP,
     CONF_RAINBOW_LAP,
     CONF_SCALE,
     DEFAULTS,
@@ -37,8 +39,11 @@ from .const import (
     BLENDS,
     MAX_STEP_WARN,
     MODES,
+    RATE_CAP_MAX,
+    RATE_CAP_MIN,
+    RATE_CAP_STEP,
 )
-from .engine import rate_cap_for
+from .engine import rate_cap_for, resolve_cap
 
 SETTING_KEYS = [
     CONF_MODE,
@@ -53,6 +58,7 @@ SETTING_KEYS = [
     CONF_RAINBOW_LAP,
     CONF_BRIGHTNESS_FADE,
 ]
+CAP_KEYS = (CONF_PRIMARY_RATE_CAP, CONF_FOLLOWER_RATE_CAP)
 
 
 def _num(lo: float, hi: float, step: float, unit: str | None = None) -> selector.NumberSelector:
@@ -64,12 +70,18 @@ def _num(lo: float, hi: float, step: float, unit: str | None = None) -> selector
     return selector.NumberSelector(selector.NumberSelectorConfig(**cfg))
 
 
-def settings_schema(current: dict[str, Any]) -> vol.Schema:
-    """Schema for the 'settings' step; defaults come from ``current``."""
+def settings_schema(current: dict[str, Any], primary_cap_default: float = 10.0) -> vol.Schema:
+    """Schema for the 'settings' step; defaults come from ``current``.
+
+    The rate caps are optional and carry a suggested value rather than a default: clearing the follower
+    field (or leaving the primary at its platform default) stores nothing, which means "platform default".
+    """
 
     def d(key: str) -> Any:
         return current.get(key, DEFAULTS[key])
 
+    primary_cap = current.get(CONF_PRIMARY_RATE_CAP, primary_cap_default)
+    follower_cap = {"suggested_value": current[CONF_FOLLOWER_RATE_CAP]} if CONF_FOLLOWER_RATE_CAP in current else {}
     return vol.Schema(
         {
             vol.Required(CONF_MODE, default=d(CONF_MODE)): selector.SelectSelector(
@@ -91,6 +103,12 @@ def settings_schema(current: dict[str, Any]) -> vol.Schema:
             vol.Required(CONF_MOMENTUM, default=d(CONF_MOMENTUM)): _num(0, 1, 0.05),
             vol.Required(CONF_RAINBOW_LAP, default=d(CONF_RAINBOW_LAP)): _num(10, 3600, 1, "s"),
             vol.Required(CONF_BRIGHTNESS_FADE, default=d(CONF_BRIGHTNESS_FADE)): _num(0, 3600, 1, "s"),
+            vol.Optional(CONF_PRIMARY_RATE_CAP, description={"suggested_value": primary_cap}): _num(
+                RATE_CAP_MIN, RATE_CAP_MAX, RATE_CAP_STEP, "/s"
+            ),
+            vol.Optional(CONF_FOLLOWER_RATE_CAP, description=follower_cap): _num(
+                RATE_CAP_MIN, RATE_CAP_MAX, RATE_CAP_STEP, "/s"
+            ),
         }
     )
 
@@ -147,6 +165,15 @@ class _FlowMixin:
         )
 
     # -- settings --------------------------------------------------------------
+    def _store_caps(self, user_input: dict[str, Any]) -> None:
+        """Keep a rate cap only when it says something: a primary cap equal to the platform default is dropped."""
+        primary = user_input.get(CONF_PRIMARY_RATE_CAP)
+        if primary is not None and float(primary) != rate_cap_for(self.hass, self._data[CONF_PRIMARY]):
+            self._data[CONF_PRIMARY_RATE_CAP] = float(primary)
+        follower = user_input.get(CONF_FOLLOWER_RATE_CAP)
+        if follower is not None:
+            self._data[CONF_FOLLOWER_RATE_CAP] = float(follower)
+
     def _warnings(self, user_input: dict[str, Any]) -> str:
         warnings = []
         if user_input[CONF_MAX_STEP] > MAX_STEP_WARN:
@@ -155,7 +182,7 @@ class _FlowMixin:
             )
         fade = user_input[CONF_FIXED_FADE]
         if fade > 0:
-            rate = rate_cap_for(self.hass, self._data[CONF_PRIMARY])
+            rate = resolve_cap(self.hass, self._data[CONF_PRIMARY], user_input.get(CONF_PRIMARY_RATE_CAP))
             implied = 180.0 / fade / rate
             if implied > MAX_STEP_WARN:
                 warnings.append(
@@ -177,13 +204,20 @@ class _FlowMixin:
                     self._ack = dict(user_input)
                 else:
                     self._data.update(user_input)
+                    for key in CAP_KEYS:  # absent = platform default
+                        self._data.pop(key, None)
+                    self._store_caps(user_input)
                     self._pending = list(self._data[CONF_FOLLOWERS])
                     self._data[CONF_FOLLOWER_SETTINGS] = {}
                     return await self.async_step_follower()
         current = {**self._current(), **(user_input or {})}
+        if user_input is not None:
+            for key in CAP_KEYS:  # a field the user cleared stays cleared when the form is re-shown
+                if key not in user_input:
+                    current.pop(key, None)
         return self.async_show_form(
             step_id="settings",
-            data_schema=settings_schema(current),
+            data_schema=settings_schema(current, rate_cap_for(self.hass, self._data[CONF_PRIMARY])),
             errors=errors,
             description_placeholders={"warning": warning},
         )
