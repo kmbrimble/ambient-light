@@ -12,13 +12,14 @@ repository (type: Integration), install **Ambient Light**, and restart Home Assi
 ## Configure
 
 Settings > Devices & services > Add integration > **Ambient Light**. Choose a name (it becomes the virtual light, for
-example `light.living_room_ambient`), the primary light, optional follower lights, and the cycle settings. Each follower
-has its own brightness scale and Rainbow phase offset. Use **Configure** on the entry to change anything later.
+example `light.living_room_ambient`), the primary light, optional follower lights, and the cycle settings. Use **Configure** on the entry to change the set-once settings later. The everyday controls are entities on the device card and
+apply at once, with no reload: **Mode**, **Blend**, **Colour speed**, **Interval**, **Rainbow lap**, **Drift min / max jump**, and a
+**brightness** number per follower (10 to 200 % of the primary, capped at the light's maximum).
 
 - **Effects:** Random, Drift and Rainbow, selectable on the virtual light.
 - **Blend:** how Random and Drift move between colours. `Wheel` (default) sweeps the hue round the colour wheel; `OKLab` blends in
   a straight, perceptually even line with no detour through other hues. Switch any time with the **Blend** select entity
-  (`select.<name>_blend`) or in the settings. Rainbow always uses the wheel.
+  (`select.<name>_blend`). Rainbow always uses the wheel.
 - **Pause:** if something else changes or turns off the primary light, the cycle pauses. Turn the virtual light on to resume.
 - **Command rate caps:** `primary_rate_cap` and `follower_rate_cap` (commands per second, 0.5 to 10) limit how fast
   commands are sent. The defaults suit most lights; lower the primary cap if a light drops offline during a cycle. Fades get

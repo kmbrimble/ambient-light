@@ -16,15 +16,15 @@ from homeassistant.components.light import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.start import async_at_started
 
 from . import AmbientConfigEntry
-from .const import DOMAIN, EFFECT_BY_MODE, EFFECT_LIST, MODE_BY_EFFECT
+from .const import CONF_MODE, EFFECT_BY_MODE, EFFECT_LIST, MODE_BY_EFFECT
 from .engine import Engine
+from .entity import device_info, set_options
 
 DIAG_INTERVAL = timedelta(seconds=60)
 
@@ -55,11 +55,10 @@ class AmbientLight(LightEntity, RestoreEntity):
     _attr_effect_list = EFFECT_LIST
 
     def __init__(self, entry: AmbientConfigEntry) -> None:
+        self._entry = entry
         self._engine: Engine = entry.runtime_data
         self._attr_unique_id = entry.entry_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)}, name=entry.title
-        )
+        self._attr_device_info = device_info(entry)
         self._diag: dict[str, Any] = {}
 
     # -- state ---------------------------------------------------------
@@ -108,6 +107,7 @@ class AmbientLight(LightEntity, RestoreEntity):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_extra_data()) is not None:
             self._engine.apply_restored(last.as_dict())
+            self._store_default_mode()
         self._diag = self._snapshot_diag()
         self.async_on_remove(self._engine.add_listener(self._on_engine_change))
         self.async_on_remove(async_at_started(self.hass, self._at_started))
@@ -144,6 +144,13 @@ class AmbientLight(LightEntity, RestoreEntity):
         if (b := kwargs.get(ATTR_BRIGHTNESS)) is not None:
             pct = max(1.0, round(b / 2.55))
         await self._engine.async_turn_on(mode, pct, kwargs.get(LIGHT_ATTR_TRANSITION))
+        if mode is not None:
+            self._store_default_mode()
+
+    def _store_default_mode(self) -> None:
+        """Keep the Mode option in step with the effect (one source of truth)."""
+        if self._engine.default_mode != self._entry.options.get(CONF_MODE):
+            set_options(self.hass, self._entry, {CONF_MODE: self._engine.default_mode})
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._engine.async_turn_off()

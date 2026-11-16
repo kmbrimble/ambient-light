@@ -8,14 +8,23 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import AmbientConfigEntry
-from .const import BLEND_BY_LABEL, BLEND_LABELS, CONF_BLEND, DOMAIN
+from .const import (
+    BLEND_BY_LABEL,
+    BLEND_LABELS,
+    CONF_BLEND,
+    CONF_MODE,
+    DOMAIN,
+    EFFECT_BY_MODE,
+    MODE_BY_EFFECT,
+)
 from .engine import Engine
+from .entity import AmbientConfigEntity, set_options
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: AmbientConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    async_add_entities([AmbientBlend(entry)])
+    async_add_entities([AmbientBlend(entry), AmbientMode(entry)])
 
 
 class AmbientBlend(SelectEntity):
@@ -54,3 +63,26 @@ class AmbientBlend(SelectEntity):
         self.hass.config_entries.async_update_entry(
             self._entry, options={**self._entry.options, CONF_BLEND: blend}
         )
+
+
+class AmbientMode(AmbientConfigEntity, SelectEntity):
+    """The mode (Random / Drift / Rainbow), two-way with the light's effect.
+
+    One source of truth: the engine's ``default_mode``, stored in the entry options. Choosing a mode here
+    switches the running effect (if the light is on) and is what turn_on uses by default; choosing an effect
+    on the light writes it back here.
+    """
+
+    _attr_name = "Mode"
+    _attr_options = list(EFFECT_BY_MODE.values())
+    _attr_icon = "mdi:palette"
+
+    def __init__(self, entry: AmbientConfigEntry) -> None:
+        super().__init__(entry, "mode")
+
+    @property
+    def current_option(self) -> str:
+        return EFFECT_BY_MODE[self._engine.default_mode]
+
+    async def async_select_option(self, option: str) -> None:
+        set_options(self.hass, self._entry, {CONF_MODE: MODE_BY_EFFECT[option.lower()]})

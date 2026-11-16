@@ -61,8 +61,22 @@ SLOW_PLATFORMS = {"meross_lan": RATE_CAP_SLOW}
 RATE_CAP_MIN = 0.5
 RATE_CAP_MAX = 10.0
 RATE_CAP_STEP = 0.5
-# Options that apply live (no reload): the blend and the rate caps.
-LIVE_OPTIONS = (CONF_BLEND, CONF_PRIMARY_RATE_CAP, CONF_FOLLOWER_RATE_CAP)
+# Options owned by device-card entities (v0.3.0). They are not asked for in the setup / options flow;
+# the options flow carries the stored values over unchanged.
+ENTITY_OPTIONS = (
+    CONF_MODE, CONF_BLEND, CONF_INTERVAL, CONF_HUE_SPEED, CONF_RAINBOW_LAP, CONF_MIN_JUMP, CONF_MAX_JUMP,
+)
+# Options that apply live (no reload): the entity options and the rate caps. Follower brightness
+# (``follower_settings[entity][scale]``) is live too; the rest of ``follower_settings`` is not.
+LIVE_OPTIONS = (*ENTITY_OPTIONS, CONF_PRIMARY_RATE_CAP, CONF_FOLLOWER_RATE_CAP)
+
+# Follower brightness relative to the primary: stored as a ratio (``scale``), shown as a percentage.
+# 1.0 = 100 % = same as the primary. Above 1 the follower is brighter than the primary, clamped at 255.
+SCALE_MIN = 0.1
+SCALE_MAX = 2.0
+SCALE_PCT_MIN = 10.0
+SCALE_PCT_MAX = 200.0
+SCALE_PCT_STEP = 5.0
 
 # Per-step hue size above which the UI warns (degrees).
 MAX_STEP_WARN = 4.0

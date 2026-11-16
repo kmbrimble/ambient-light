@@ -34,7 +34,7 @@ SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
 
 READOPT_SCHEMA = cv.make_entity_service_schema({vol.Optional(ATTR_ONLY_OFF, default=True): cv.boolean})
 
-PLATFORMS = [Platform.LIGHT, Platform.SELECT]
+PLATFORMS = [Platform.LIGHT, Platform.NUMBER, Platform.SELECT]
 
 type AmbientConfigEntry = ConfigEntry[Engine]
 
@@ -107,7 +107,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AmbientConfigEntry) -> 
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: AmbientConfigEntry) -> None:
-    """Options changed: reload, unless only live options (blend, rate caps) changed."""
+    """Options changed: reload, unless only live options (entity values, rate caps, follower brightness) changed."""
     engine = entry.runtime_data
     if engine.options_changed(dict(entry.options)):
         await hass.config_entries.async_reload(entry.entry_id)

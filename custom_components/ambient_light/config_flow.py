@@ -15,49 +15,33 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_BLEND,
     CONF_BRIGHTNESS_FADE,
     CONF_FIXED_FADE,
     CONF_FOLLOWER_RATE_CAP,
     CONF_FOLLOWER_SETTINGS,
     CONF_FOLLOWERS,
-    CONF_HUE_SPEED,
-    CONF_INTERVAL,
-    CONF_MAX_JUMP,
     CONF_MAX_STEP,
-    CONF_MIN_JUMP,
-    CONF_MODE,
     CONF_MOMENTUM,
     CONF_NAME,
     CONF_OFFSET,
     CONF_PRIMARY,
     CONF_PRIMARY_RATE_CAP,
-    CONF_RAINBOW_LAP,
     CONF_SCALE,
     DEFAULTS,
     DOMAIN,
-    BLENDS,
+    ENTITY_OPTIONS,
+    SCALE_PCT_MAX,
+    SCALE_PCT_MIN,
+    SCALE_PCT_STEP,
     MAX_STEP_WARN,
-    MODES,
     RATE_CAP_MAX,
     RATE_CAP_MIN,
     RATE_CAP_STEP,
 )
-from .engine import rate_cap_for, resolve_cap
+from .engine import clamp_scale, rate_cap_for, resolve_cap
 
-SETTING_KEYS = [
-    CONF_MODE,
-    CONF_BLEND,
-    CONF_INTERVAL,
-    CONF_HUE_SPEED,
-    CONF_MAX_STEP,
-    CONF_FIXED_FADE,
-    CONF_MIN_JUMP,
-    CONF_MAX_JUMP,
-    CONF_MOMENTUM,
-    CONF_RAINBOW_LAP,
-    CONF_BRIGHTNESS_FADE,
-]
+# Form field for a follower's brightness, in percent of the primary's (stored as the ``scale`` ratio).
+CONF_BRIGHTNESS = "brightness"
 CAP_KEYS = (CONF_PRIMARY_RATE_CAP, CONF_FOLLOWER_RATE_CAP)
 
 
@@ -84,24 +68,9 @@ def settings_schema(current: dict[str, Any], primary_cap_default: float = 10.0) 
     follower_cap = {"suggested_value": current[CONF_FOLLOWER_RATE_CAP]} if CONF_FOLLOWER_RATE_CAP in current else {}
     return vol.Schema(
         {
-            vol.Required(CONF_MODE, default=d(CONF_MODE)): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=MODES, translation_key="mode", mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Required(CONF_BLEND, default=d(CONF_BLEND)): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=BLENDS, translation_key="blend", mode=selector.SelectSelectorMode.DROPDOWN
-                )
-            ),
-            vol.Required(CONF_INTERVAL, default=d(CONF_INTERVAL)): _num(1, 3600, 1, "s"),
-            vol.Required(CONF_HUE_SPEED, default=d(CONF_HUE_SPEED)): _num(0.5, 360, 0.5, "°/s"),
             vol.Required(CONF_MAX_STEP, default=d(CONF_MAX_STEP)): _num(0.5, 30, 0.5, "°"),
             vol.Required(CONF_FIXED_FADE, default=d(CONF_FIXED_FADE)): _num(0, 3600, 1, "s"),
-            vol.Required(CONF_MIN_JUMP, default=d(CONF_MIN_JUMP)): _num(1, 180, 1, "°"),
-            vol.Required(CONF_MAX_JUMP, default=d(CONF_MAX_JUMP)): _num(1, 180, 1, "°"),
             vol.Required(CONF_MOMENTUM, default=d(CONF_MOMENTUM)): _num(0, 1, 0.05),
-            vol.Required(CONF_RAINBOW_LAP, default=d(CONF_RAINBOW_LAP)): _num(10, 3600, 1, "s"),
             vol.Required(CONF_BRIGHTNESS_FADE, default=d(CONF_BRIGHTNESS_FADE)): _num(0, 3600, 1, "s"),
             vol.Optional(CONF_PRIMARY_RATE_CAP, description={"suggested_value": primary_cap}): _num(
                 RATE_CAP_MIN, RATE_CAP_MAX, RATE_CAP_STEP, "/s"
@@ -195,21 +164,18 @@ class _FlowMixin:
         errors: dict[str, str] = {}
         warning = ""
         if user_input is not None:
-            if user_input[CONF_MIN_JUMP] > user_input[CONF_MAX_JUMP]:
-                errors[CONF_MAX_JUMP] = "jump_range"
+            warning = self._warnings(user_input)
+            if warning and user_input != self._ack:
+                # Soft warning: shown once; submitting the same values again accepts them.
+                self._ack = dict(user_input)
             else:
-                warning = self._warnings(user_input)
-                if warning and user_input != self._ack:
-                    # Soft warning: shown once; submitting the same values again accepts them.
-                    self._ack = dict(user_input)
-                else:
-                    self._data.update(user_input)
-                    for key in CAP_KEYS:  # absent = platform default
-                        self._data.pop(key, None)
-                    self._store_caps(user_input)
-                    self._pending = list(self._data[CONF_FOLLOWERS])
-                    self._data[CONF_FOLLOWER_SETTINGS] = {}
-                    return await self.async_step_follower()
+                self._data.update(user_input)
+                for key in CAP_KEYS:  # absent = platform default
+                    self._data.pop(key, None)
+                self._store_caps(user_input)
+                self._pending = list(self._data[CONF_FOLLOWERS])
+                self._data[CONF_FOLLOWER_SETTINGS] = {}
+                return await self.async_step_follower()
         current = {**self._current(), **(user_input or {})}
         if user_input is not None:
             for key in CAP_KEYS:  # a field the user cleared stays cleared when the form is re-shown
@@ -227,7 +193,7 @@ class _FlowMixin:
         if user_input is not None:
             eid = self._pending.pop(0)
             self._data[CONF_FOLLOWER_SETTINGS][eid] = {
-                CONF_SCALE: float(user_input[CONF_SCALE]),
+                CONF_SCALE: clamp_scale(float(user_input[CONF_BRIGHTNESS]) / 100.0),
                 CONF_OFFSET: float(user_input[CONF_OFFSET]) % 360.0,
             }
         if not self._pending:
@@ -236,7 +202,9 @@ class _FlowMixin:
         prev = self._current().get(CONF_FOLLOWER_SETTINGS, {}).get(eid, {})
         schema = vol.Schema(
             {
-                vol.Required(CONF_SCALE, default=prev.get(CONF_SCALE, 1.0)): _num(0.1, 1.0, 0.05),
+                vol.Required(CONF_BRIGHTNESS, default=round(clamp_scale(prev.get(CONF_SCALE, 1.0)) * 100)): _num(
+                    SCALE_PCT_MIN, SCALE_PCT_MAX, SCALE_PCT_STEP, "%"
+                ),
                 vol.Required(CONF_OFFSET, default=prev.get(CONF_OFFSET, 0.0)): _num(0, 360, 1, "°"),
             }
         )
@@ -273,7 +241,7 @@ class AmbientLightConfigFlow(_FlowMixin, ConfigFlow, domain=DOMAIN):
 
 
 class AmbientLightOptionsFlow(_FlowMixin, OptionsFlow):
-    """Edit devices and settings; saving reloads the entry."""
+    """Edit the set-once settings; saving reloads the entry. Entity-owned values (mode, speed, ...) are kept."""
 
     def _current(self) -> dict[str, Any]:
         return dict(self.config_entry.options)
@@ -283,4 +251,6 @@ class AmbientLightOptionsFlow(_FlowMixin, OptionsFlow):
         return await self._devices("init", user_input, with_name=False)
 
     async def _finish(self) -> ConfigFlowResult:
-        return self.async_create_entry(data=dict(self._data))
+        # The entities own these; the flow does not ask for them, so carry the stored values over.
+        kept = {k: v for k, v in self._current().items() if k in ENTITY_OPTIONS}
+        return self.async_create_entry(data={**kept, **self._data})

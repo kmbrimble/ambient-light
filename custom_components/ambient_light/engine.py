@@ -40,6 +40,8 @@ from .const import (
     CONF_SCALE,
     DEFAULTS,
     LIVE_OPTIONS,
+    SCALE_MAX,
+    SCALE_MIN,
     MODE_RAINBOW,
     MODES,
     RATE_CAP_DEFAULT,
@@ -123,6 +125,20 @@ def resolve_cap(hass: HomeAssistant, entity_id: str, configured: Any) -> float:
     return min(RATE_CAP_MAX, max(RATE_CAP_MIN, value))
 
 
+def clamp_scale(value: Any) -> float:
+    """A stored follower ``scale`` (a ratio; 1.0 = same as the primary) limited to the allowed range."""
+    try:
+        return min(SCALE_MAX, max(SCALE_MIN, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def follower_scales(options: dict[str, Any]) -> dict[str, float]:
+    """Follower entity -> scale from an options mapping (missing = 1.0, so legacy entries read as 100 %)."""
+    fsettings = options.get(CONF_FOLLOWER_SETTINGS) or {}
+    return {e: clamp_scale((fsettings.get(e) or {}).get(CONF_SCALE, 1.0)) for e in options.get(CONF_FOLLOWERS, [])}
+
+
 @dataclass(eq=False)
 class Slot:
     """Per-light sender state."""
@@ -186,7 +202,8 @@ class Engine:
         # Options the engine was built from, less the live ones (blend, rate caps): a change to anything
         # else needs a reload.
         self._base_options = self._reload_options(options)
-        self.default_mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
+        mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
+        self.default_mode = mode if mode in MODES else DEFAULTS[CONF_MODE]
         self.colour = ColourClock(self.settings, rng)
         self.bright = BrightnessFade(100.0)
 
@@ -205,7 +222,7 @@ class Engine:
                 eid,
                 False,
                 resolve_cap(hass, eid, options.get(CONF_FOLLOWER_RATE_CAP)),
-                scale=float(fs.get(CONF_SCALE, 1.0)),
+                scale=clamp_scale(fs.get(CONF_SCALE, 1.0)),
                 offset=float(fs.get(CONF_OFFSET, 0.0)),
             )
         self.follower_ids = [e for e in self.slots if e != self.primary_id]
@@ -272,24 +289,63 @@ class Engine:
 
     @staticmethod
     def _reload_options(options: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in options.items() if k not in LIVE_OPTIONS}
+        """The options a change of which needs a reload: everything but the live ones and follower scales."""
+        out = {k: v for k, v in options.items() if k not in LIVE_OPTIONS}
+        if isinstance(out.get(CONF_FOLLOWER_SETTINGS), dict):
+            out[CONF_FOLLOWER_SETTINGS] = {
+                e: {k: v for k, v in (fs or {}).items() if k != CONF_SCALE}
+                for e, fs in out[CONF_FOLLOWER_SETTINGS].items()
+            }
+        return out
 
     def options_changed(self, options: dict[str, Any]) -> bool:
         """True if ``options`` differ from the engine's in anything but the live ones (needs a reload)."""
         return self._reload_options(options) != self._base_options
 
     def apply_options(self, options: dict[str, Any]) -> None:
-        """Apply the live options (blend, rate caps). Callers have checked ``options_changed`` is False.
+        """Apply the live options (see ``LIVE_OPTIONS``). Callers have checked ``options_changed`` is False.
+
+        Idempotent: entities call it with the options they are about to store, and the entry's update
+        listener calls it again with the stored ones. No colour jumps: a Random/Drift fade keeps the
+        duration planned at its pick and the next pick starts from the colour on display; Rainbow advances
+        its phase with the old lap before the new one takes over.
 
         Everything derived from a slot's rate (effective rate, Rainbow minimum lap, the wheel speed cap,
-        OKLab fade durations, the sender cadence) reads ``slot.rate``. Rainbow and the cadence follow at once; a
-        Random/Drift fade keeps the duration planned at its pick, and the next pick uses the new rate.
+        OKLab fade durations, the sender cadence) reads ``slot.rate``.
         """
-        self.set_blend(options.get(CONF_BLEND, DEFAULTS[CONF_BLEND]), notify=False)
+        now = self._clock()
+        if self.on:
+            self.colour.hue_at(now, self.primary_rate)  # advance with the old settings first
+        s = self.settings
+        new = Settings.from_options(options)
+        interval_changed = new.interval != s.interval
+        s.interval, s.hue_speed, s.rainbow_lap = new.interval, new.hue_speed, new.rainbow_lap
+        s.min_jump, s.max_jump = new.min_jump, new.max_jump
+        if interval_changed and self.on:
+            self.colour.reschedule(now)
+        self.set_blend(new.blend, notify=False)
+        mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
+        if mode in MODES:
+            self.set_default_mode(mode, notify=False)
+        scales = follower_scales(options)
         for slot in self.slots.values():
             key = CONF_PRIMARY_RATE_CAP if slot.primary else CONF_FOLLOWER_RATE_CAP
             slot.cap = resolve_cap(self.hass, slot.entity_id, options.get(key))
+            if not slot.primary and slot.entity_id in scales:
+                slot.scale = scales[slot.entity_id]
         self.on_change()
+
+    def set_default_mode(self, mode: str, notify: bool = True) -> None:
+        """Set the default mode (what turn_on uses) and, if the light is on, switch the running effect."""
+        if mode not in MODES:
+            raise ValueError(f"unknown mode {mode}")
+        self.default_mode = mode
+        if self.on and mode != self.mode:
+            self.mode = mode
+            self.colour.set_mode(mode, self._clock())
+            self._reset_sent()
+        if notify:
+            self.on_change()
 
     def rate_caps(self) -> dict[str, float]:
         """The configured (or platform default) command-rate cap per light."""
@@ -401,6 +457,8 @@ class Engine:
         was_on = self.on
         if mode is not None and mode not in MODES:
             raise ValueError(f"unknown mode {mode}")
+        if mode is not None:
+            self.default_mode = mode  # one source of truth: the effect chosen is the new default
         if not was_on:
             self.released.clear()
             self.mode = mode or self.default_mode
@@ -480,6 +538,8 @@ class Engine:
         mode = data.get("mode")
         if mode in MODES:
             self.mode = mode
+            if data.get("on"):
+                self.default_mode = mode  # one source of truth while running
         pct = data.get("brightness_pct")
         if isinstance(pct, int | float):
             self.bright.set_target(float(pct), now, 0)
@@ -658,10 +718,10 @@ class Engine:
             # the colour's value (below 1 for a mid-blend colour) goes into the brightness instead.
             h, sat, v = rgb_to_hs_v(rgb)
             hs = (round(h) % 360, round(sat))
-            b = max(1, round(b * slot.scale * v))
+            b = max(1, min(255, round(b * slot.scale * v)))
             data.update(hs_color=list(hs), brightness=b)
             return data, (hs, b)
-        b = max(1, round(b * slot.scale))
+        b = max(1, min(255, round(b * slot.scale)))
         ints = tuple(round(c) for c in rgb)
         data.update(rgb_color=list(ints), brightness=b)
         return data, (ints, b)

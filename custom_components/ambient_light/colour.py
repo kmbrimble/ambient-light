@@ -284,6 +284,14 @@ class ColourClock:
         self._last_t = now
         self._sign = self.rng.choice((1, -1))
 
+    def reschedule(self, now: float) -> None:
+        """The interval changed: the next pick is one new interval after the last, but never in the past.
+
+        The fade under way is untouched, and the next pick starts from the colour on display.
+        """
+        if self.mode != MODE_RAINBOW:
+            self._next_pick = max(now, self._fade_t0 + self.settings.interval)
+
     def set_mode(self, mode: str, now: float) -> None:
         """Switch mode continuing from the current hue."""
         if mode == self.mode:
