@@ -73,7 +73,7 @@ class AmbientMode(AmbientConfigEntity, SelectEntity):
     on the light writes it back here.
     """
 
-    _attr_name = "Mode"
+    _attr_name = "Colour mode"
     _attr_options = list(EFFECT_BY_MODE.values())
     _attr_icon = "mdi:palette"
 

@@ -1,4 +1,4 @@
-"""Number entities on the device card: colour speed, interval, Rainbow lap, Drift jumps, follower brightness.
+"""Number entities on the device card: colour change speed, time between colours, Rainbow cycle time, Drift moves, follower "vs main light".
 
 Each change applies live (no reload) and is stored in the entry options, so it survives a restart and is
 what the options flow shows.
@@ -42,11 +42,11 @@ class _Spec:
 
 
 SPECS = (
-    _Spec("hue_speed", "Colour speed", CONF_HUE_SPEED, "°/s", 0.5, 60, 0.5, NumberMode.SLIDER, "mdi:speedometer"),
-    _Spec("interval", "Interval", CONF_INTERVAL, UnitOfTime.SECONDS, 5, 600, 1, NumberMode.BOX, "mdi:timer-outline"),
-    _Spec("rainbow_lap", "Rainbow lap", CONF_RAINBOW_LAP, UnitOfTime.SECONDS, 10, 3600, 5, NumberMode.BOX, "mdi:rotate-right"),
-    _Spec("min_jump", "Drift min jump", CONF_MIN_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-collapse-horizontal"),
-    _Spec("max_jump", "Drift max jump", CONF_MAX_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-expand-horizontal"),
+    _Spec("hue_speed", "Colour change speed", CONF_HUE_SPEED, "°/s", 0.5, 60, 0.5, NumberMode.SLIDER, "mdi:speedometer"),
+    _Spec("interval", "Time between colours", CONF_INTERVAL, UnitOfTime.SECONDS, 5, 600, 1, NumberMode.BOX, "mdi:timer-outline"),
+    _Spec("rainbow_lap", "Rainbow cycle time", CONF_RAINBOW_LAP, UnitOfTime.SECONDS, 10, 3600, 5, NumberMode.BOX, "mdi:rotate-right"),
+    _Spec("min_jump", "Drift smallest move", CONF_MIN_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-collapse-horizontal"),
+    _Spec("max_jump", "Drift largest move", CONF_MAX_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-expand-horizontal"),
 )
 
 
@@ -115,7 +115,7 @@ class AmbientFollowerBrightness(AmbientConfigEntity, NumberEntity):
 
     @property
     def name(self) -> str:
-        return f"{follower_label(self.hass, self._follower)} brightness"
+        return f"{follower_label(self.hass, self._follower)} vs main light"
 
     @property
     def native_value(self) -> float:

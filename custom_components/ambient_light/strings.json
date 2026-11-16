@@ -12,7 +12,7 @@
       },
       "settings": {
         "title": "Set-once settings",
-        "description": "{warning}Mode, colour speed, interval, Rainbow lap, Drift jumps, blend and follower brightness are on the device card after setup.",
+        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time and each follower's vs main light number are on the device card after setup.",
         "data": {
           "max_step": "Maximum step",
           "fixed_fade": "Fixed colour fade (0 = use hue speed)",
@@ -22,7 +22,7 @@
           "follower_rate_cap": "Follower command rate cap"
         },
         "data_description": {
-          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the Colour speed and the shortest Rainbow lap, and for OKLab the change on any colour channel (step × 255 / 60).",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the Colour change speed and the shortest Rainbow cycle time, and for OKLab the change on any colour channel (step × 255 / 60).",
           "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
           "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
           "brightness_fade": "Default seconds for a brightness change.",
@@ -34,11 +34,11 @@
         "title": "Follower: {entity}",
         "description": "Settings for this follower light.",
         "data": {
-          "brightness": "Brightness",
+          "brightness": "vs main light",
           "offset": "Rainbow phase offset"
         },
         "data_description": {
-          "brightness": "Percent of the primary's brightness (10 to 200; 100 = the same, above 100 = brighter, up to the light's maximum). Also a number entity on the device card.",
+          "brightness": "Percent of the primary light's brightness (10 to 200; 100 = the same, above 100 = brighter but never past the light's maximum). Also the vs main light number on the device card.",
           "offset": "Degrees added to the Rainbow hue for this light."
         }
       }
@@ -61,7 +61,7 @@
       },
       "settings": {
         "title": "Set-once settings",
-        "description": "{warning}Mode, colour speed, interval, Rainbow lap, Drift jumps, blend and follower brightness live on the device card and apply at once.",
+        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time and each follower's vs main light number live on the device card and apply at once.",
         "data": {
           "max_step": "Maximum step",
           "fixed_fade": "Fixed colour fade (0 = use hue speed)",
@@ -71,7 +71,7 @@
           "follower_rate_cap": "Follower command rate cap"
         },
         "data_description": {
-          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the Colour speed and the shortest Rainbow lap, and for OKLab the change on any colour channel (step × 255 / 60).",
+          "max_step": "Largest hue change per command, in degrees. Above 4° looks visibly jumpy. Limits the Colour change speed and the shortest Rainbow cycle time, and for OKLab the change on any colour channel (step × 255 / 60).",
           "fixed_fade": "If above 0, every colour change takes exactly this long instead of using the hue speed.",
           "momentum": "Chance (0 to 1) that Drift keeps going the same way round the wheel.",
           "brightness_fade": "Default seconds for a brightness change.",
@@ -83,11 +83,11 @@
         "title": "Follower: {entity}",
         "description": "Settings for this follower light.",
         "data": {
-          "brightness": "Brightness",
+          "brightness": "vs main light",
           "offset": "Rainbow phase offset"
         },
         "data_description": {
-          "brightness": "Percent of the primary's brightness (10 to 200; 100 = the same, above 100 = brighter, up to the light's maximum). Also a number entity on the device card.",
+          "brightness": "Percent of the primary light's brightness (10 to 200; 100 = the same, above 100 = brighter but never past the light's maximum). Also the vs main light number on the device card.",
           "offset": "Degrees added to the Rainbow hue for this light."
         }
       }
