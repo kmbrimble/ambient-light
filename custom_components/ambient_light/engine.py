@@ -239,7 +239,7 @@ class Engine:
         self._ctx_set: set[str] = set()
         self._unsub: Callable[[], None] | None = None
         self._last_warn = -WARN_INTERVAL
-        self._info_last: dict[str, float] = {}
+        self._info_last: dict[tuple[str, str], float] = {}
         self._diag_t0 = self._clock()
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
@@ -597,7 +597,7 @@ class Engine:
             rule = self._deviation(slot, new)
             if rule is None:
                 return
-        self._log_decision("Pausing", self.primary_id, rule, new, slot)
+        self._log_decision("Pausing", self.primary_id, rule, new, slot, old)
         self.paused = True
         self._sync_tasks()
         self.on_change()
@@ -622,7 +622,7 @@ class Engine:
             and mode in NON_COLOUR_MODES
             and (old is None or old.attributes.get("color_mode") != mode)
         ):
-            self._release(eid, "colour_mode", new)
+            self._release(eid, "colour_mode", new, old)
             return
         ctx = new.context
         if self.is_ours(ctx):
@@ -630,19 +630,22 @@ class Engine:
         if recovered and not _has_origin(ctx):
             return  # startup / integration re-reporting: adopted stays adopted, released stays released
         if new.state == STATE_OFF and (eid in self.released or recovered):
-            if eid in self.released:
+            # Hand a released follower back only on a genuine on->off of one that was ALREADY released
+            # before this event (or returned from unavailable carrying an origin context: a user's off). An off->off write (a device echo or attribute refresh right after the
+            # release) must not re-adopt it, or the next tick would turn it back on.
+            if eid in self.released and ((old is not None and old.state == STATE_ON) or recovered):
                 self.released.discard(eid)
                 slot.last_sent = None
                 self.on_change()
             return
         if _has_origin(ctx):
-            self._release(eid, "origin", new)
+            self._release(eid, "origin", new, old)
         elif new.state == STATE_OFF:
-            self._release(eid, "off", new)
+            self._release(eid, "off", new, old)
         else:
             rule = self._deviation(slot, new)
             if rule is not None:
-                self._release(eid, rule, new)
+                self._release(eid, rule, new, old)
 
     def _deviation(self, slot: Slot, new) -> str | None:
         """Rule name if ``new`` moved materially away from what we last sent, else None."""
@@ -655,28 +658,30 @@ class Engine:
                 return "brightness_deviation"
         return None
 
-    def _log_decision(self, action: str, eid: str, rule: str, new, slot: Slot) -> None:
-        """Debug always; info at most once per light per 10 min (these lights are not in the recorder)."""
+    def _log_decision(self, action: str, eid: str, rule: str, new, slot: Slot, old=None) -> None:
+        """Debug always; WARNING (debug logging resets on restart), at most once per light and rule per 10 min."""
         colour, _value, bright = _chroma_bright(new.attributes)
         hs = rgb_to_hs_v(colour) if colour is not None else (None, None, None)
         ctx = new.context
         msg = (
             "%s %s: rule=%s context(user_id=%s parent_id=%s ours=%s) state=%s "
-            "sent(hue=%s sat=%s bright=%s) reported(hue=%s sat=%s bright=%s)"
+            "sent(hue=%s sat=%s bright=%s) reported(hue=%s sat=%s bright=%s) old_state=%s"
         )
         args = (
             action, eid, rule, ctx.user_id, ctx.parent_id, self.is_ours(ctx), new.state,
             _r(slot.sent_hue), _r(slot.sent_sat), slot.sent_bright, _r(hs[0]), _r(hs[1]), bright,
+            old.state if old is not None else None,
         )
         _LOGGER.debug(msg, *args)
         now = self._clock()
-        if now - self._info_last.get(eid, -INFO_INTERVAL) >= INFO_INTERVAL:
-            self._info_last[eid] = now
-            _LOGGER.info(msg, *args)
+        key = (eid, rule)
+        if now - self._info_last.get(key, -INFO_INTERVAL) >= INFO_INTERVAL:
+            self._info_last[key] = now
+            _LOGGER.warning(msg, *args)
 
-    def _release(self, eid: str, rule: str, new) -> None:
+    def _release(self, eid: str, rule: str, new, old=None) -> None:
         if eid not in self.released:
-            self._log_decision("Releasing", eid, rule, new, self.slots[eid])
+            self._log_decision("Releasing", eid, rule, new, self.slots[eid], old)
             self.released.add(eid)
             self.on_change()
 
