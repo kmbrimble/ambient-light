@@ -20,6 +20,11 @@ set_brightness:
           max: 3600
           step: 1
           unit_of_measurement: s
+    resume_paused:
+      required: false
+      default: false
+      selector:
+        boolean:
 
 readopt_followers:
   target:

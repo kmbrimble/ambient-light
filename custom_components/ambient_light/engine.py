@@ -50,6 +50,7 @@ from .const import (
     SLOW_PLATFORMS,
 )
 
+RATE_WINDOW = 60.0
 _LOGGER = logging.getLogger(__name__)
 
 EWMA_ALPHA = 0.3
@@ -157,9 +158,7 @@ class Slot:
     task: asyncio.Task | None = None
     sent: int = 0
     skipped: int = 0
-    win_t0: float = 0.0
-    win_n: int = 0
-    last_rate: float = 0.0
+    sent_times: deque = field(default_factory=lambda: deque(maxlen=2000))
     unavailable: bool = False
 
     @property
@@ -240,7 +239,6 @@ class Engine:
         self._unsub: Callable[[], None] | None = None
         self._last_warn = -WARN_INTERVAL
         self._info_last: dict[tuple[str, str], float] = {}
-        self._diag_t0 = self._clock()
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Call ``listener`` after any change of engine state; returns the unsubscribe function."""
@@ -506,10 +504,26 @@ class Engine:
         except Exception as err:  # noqa: BLE001 - never let one light break turn_off
             self._note_failure(entity_id, err)
 
-    def set_brightness(self, pct: float, transition: float | None = None) -> None:
-        """Update the target; fade if running. Never resumes or turns on."""
+    def set_brightness(
+        self, pct: float, transition: float | None = None, resume_paused: bool = False
+    ) -> None:
+        """Update the target; fade if running. Never turns on.
+
+        Resumes a paused cycle only when ``resume_paused`` is set, the light is on and the target changes.
+        """
         now = self._clock()
         fade = self.settings.brightness_fade if transition is None else transition
+        old = self.bright.target
+        if resume_paused and self.on and self.paused and pct != old:
+            _LOGGER.warning(
+                "Resuming paused cycle: brightness target changed from %.0f%% to %.0f%%", old, pct
+            )
+            self.bright.set_target(pct, now, fade)
+            self.paused = False
+            self._reset_sent()
+            self._sync_tasks()
+            self.on_change()
+            return
         if not self.active:
             fade = 0.0
         self.bright.set_target(pct, now, fade)
@@ -763,6 +777,7 @@ class Engine:
         else:
             slot.last_sent = key
             slot.sent += 1
+            slot.sent_times.append(self._clock())
             rtt = max(0.0, self._clock() - t0)
             slot.ewma = rtt if slot.ewma is None else EWMA_ALPHA * rtt + (1 - EWMA_ALPHA) * slot.ewma
         finally:
@@ -784,15 +799,11 @@ class Engine:
         return {s.entity_id: round(s.rate, 1) for s in self.slots.values()}
 
     def measure_rates(self) -> dict[str, float]:
-        """Measured SENT steps/s per light since the previous call (rounded to 0.5); idle time counts."""
+        """Commands actually sent per light per second over the last RATE_WINDOW seconds, rounded to 0.1."""
         now = self._clock()
         out: dict[str, float] = {}
         for s in self.slots.values():
-            elapsed = now - self._diag_t0
-            if elapsed > 1.0:
-                s.last_rate = (s.sent - s.win_n) / elapsed
-                s.win_n = s.sent
-            out[s.entity_id] = round(s.last_rate * 2) / 2
-        if now - self._diag_t0 > 1.0:
-            self._diag_t0 = now
+            while s.sent_times and now - s.sent_times[0] > RATE_WINDOW:
+                s.sent_times.popleft()
+            out[s.entity_id] = round(len(s.sent_times) / RATE_WINDOW, 1)
         return out

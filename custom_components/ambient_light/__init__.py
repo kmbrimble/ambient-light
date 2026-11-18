@@ -15,6 +15,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import (
     ATTR_BRIGHTNESS_PCT,
     ATTR_ONLY_OFF,
+    ATTR_RESUME_PAUSED,
     ATTR_TRANSITION,
     DOMAIN,
     HOOKS,
@@ -29,6 +30,7 @@ SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Required(ATTR_BRIGHTNESS_PCT): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
         vol.Optional(ATTR_TRANSITION): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
+        vol.Optional(ATTR_RESUME_PAUSED, default=False): cv.boolean,
     }
 )
 
@@ -67,7 +69,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         engines = await _engines(call)
         transition = call.data.get(ATTR_TRANSITION)
         for engine in engines:
-            engine.set_brightness(max(1.0, call.data[ATTR_BRIGHTNESS_PCT]), transition)
+            engine.set_brightness(
+                max(1.0, call.data[ATTR_BRIGHTNESS_PCT]), transition, call.data[ATTR_RESUME_PAUSED]
+            )
 
     async def _readopt_followers(call: ServiceCall) -> None:
         for engine in await _engines(call):

@@ -86,6 +86,7 @@ SERVICE_READOPT_FOLLOWERS = "readopt_followers"
 ATTR_ONLY_OFF = "only_off"
 ATTR_BRIGHTNESS_PCT = "brightness_pct"
 ATTR_TRANSITION = "transition"
+ATTR_RESUME_PAUSED = "resume_paused"
 
 # Hooks for the test-suite (hass.data[DOMAIN]): "clock", "rng", "run_senders".
 HOOKS = "_hooks"
