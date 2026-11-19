@@ -13,6 +13,9 @@ from .const import (
     BLEND_LABELS,
     CONF_BLEND,
     CONF_MODE,
+    CONF_RAINBOW_DIRECTION,
+    DIRECTION_BY_LABEL,
+    DIRECTION_LABELS,
     DOMAIN,
     EFFECT_BY_MODE,
     MODE_BY_EFFECT,
@@ -24,7 +27,7 @@ from .entity import AmbientConfigEntity, set_options
 async def async_setup_entry(
     hass: HomeAssistant, entry: AmbientConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    async_add_entities([AmbientBlend(entry), AmbientMode(entry)])
+    async_add_entities([AmbientBlend(entry), AmbientMode(entry), AmbientRainbowDirection(entry)])
 
 
 class AmbientBlend(SelectEntity):
@@ -86,3 +89,21 @@ class AmbientMode(AmbientConfigEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         set_options(self.hass, self._entry, {CONF_MODE: MODE_BY_EFFECT[option.lower()]})
+
+
+class AmbientRainbowDirection(AmbientConfigEntity, SelectEntity):
+    """Rainbow direction: Loop wraps 359.9 -> 0, Bounce sweeps 0.5..359.5 and back, never crossing the seam."""
+
+    _attr_name = "Rainbow direction"
+    _attr_options = list(DIRECTION_LABELS.values())
+    _attr_icon = "mdi:swap-horizontal"
+
+    def __init__(self, entry: AmbientConfigEntry) -> None:
+        super().__init__(entry, "rainbow_direction")
+
+    @property
+    def current_option(self) -> str:
+        return DIRECTION_LABELS[self._engine.settings.rainbow_direction]
+
+    async def async_select_option(self, option: str) -> None:
+        set_options(self.hass, self._entry, {CONF_RAINBOW_DIRECTION: DIRECTION_BY_LABEL[option]})

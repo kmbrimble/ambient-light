@@ -29,6 +29,7 @@ CONF_MOMENTUM = "momentum"
 CONF_RAINBOW_LAP = "rainbow_lap"
 CONF_BRIGHTNESS_FADE = "brightness_fade"
 CONF_BLEND = "blend"
+CONF_RAINBOW_DIRECTION = "rainbow_direction"
 CONF_PRIMARY_RATE_CAP = "primary_rate_cap"
 CONF_FOLLOWER_RATE_CAP = "follower_rate_cap"
 
@@ -38,6 +39,16 @@ BLENDS = [BLEND_WHEEL, BLEND_OKLAB]
 # Labels of the blend select entity (the option values users pick in the UI and in automations).
 BLEND_LABELS = {BLEND_WHEEL: "Wheel", BLEND_OKLAB: "OKLab"}
 BLEND_BY_LABEL = {v: k for k, v in BLEND_LABELS.items()}
+
+DIRECTION_LOOP = "loop"
+DIRECTION_BOUNCE = "bounce"
+DIRECTIONS = [DIRECTION_LOOP, DIRECTION_BOUNCE]
+# Labels of the Rainbow direction select. Loop wraps 359.9 -> 0; Bounce reverses at BOUNCE_LO / BOUNCE_HI and never
+# crosses the seam (a strip whose firmware fades the long way round 0/360 sweeps the whole rainbow there).
+DIRECTION_LABELS = {DIRECTION_LOOP: "Loop", DIRECTION_BOUNCE: "Bounce"}
+DIRECTION_BY_LABEL = {v: k for k, v in DIRECTION_LABELS.items()}
+BOUNCE_LO = 0.5
+BOUNCE_HI = 359.5
 
 DEFAULTS = {
     CONF_MODE: MODE_RANDOM,
@@ -51,6 +62,7 @@ DEFAULTS = {
     CONF_RAINBOW_LAP: 120.0,
     CONF_BRIGHTNESS_FADE: 60.0,
     CONF_BLEND: BLEND_WHEEL,
+    CONF_RAINBOW_DIRECTION: DIRECTION_LOOP,
 }
 
 # Maximum commands per second per light, by platform of the entity.
@@ -64,7 +76,8 @@ RATE_CAP_STEP = 0.5
 # Options owned by device-card entities (v0.3.0). They are not asked for in the setup / options flow;
 # the options flow carries the stored values over unchanged.
 ENTITY_OPTIONS = (
-    CONF_MODE, CONF_BLEND, CONF_INTERVAL, CONF_HUE_SPEED, CONF_RAINBOW_LAP, CONF_MIN_JUMP, CONF_MAX_JUMP,
+    CONF_MODE, CONF_BLEND, CONF_INTERVAL, CONF_HUE_SPEED, CONF_RAINBOW_LAP, CONF_RAINBOW_DIRECTION,
+    CONF_MIN_JUMP, CONF_MAX_JUMP,
 )
 # Options that apply live (no reload): the entity options and the rate caps. Follower brightness
 # (``follower_settings[entity][scale]``) is live too; the rest of ``follower_settings`` is not.

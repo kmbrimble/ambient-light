@@ -14,7 +14,7 @@ repository (type: Integration), install **Ambient Light**, and restart Home Assi
 Settings > Devices & services > Add integration > **Ambient Light**. Choose a name (it becomes the virtual light, for
 example `light.living_room_ambient`), the primary light, optional follower lights, and the cycle settings. Use **Configure** on the entry to change the set-once settings later. The everyday controls are entities on the device card and
 apply at once, with no reload: **Colour mode**, **Blend**, **Colour change speed**, **Time between colours**, **Drift smallest / largest move**,
-**Rainbow cycle time**, and a **vs main light** number per follower (10 to 200 % of the primary's brightness, capped at the light's maximum).
+**Rainbow cycle time**, **Rainbow direction** (`Loop`, or `Bounce` which never crosses the 0/360 seam), and a **vs main light** number per follower (10 to 200 % of the primary's brightness, capped at the light's maximum).
 
 - **Effects:** Random, Drift and Rainbow, selectable on the virtual light.
 - **Blend:** how Random and Drift move between colours. `Wheel` (default) sweeps the hue round the colour wheel; `OKLab` blends in

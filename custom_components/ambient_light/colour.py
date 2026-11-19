@@ -10,6 +10,11 @@ from dataclasses import dataclass
 
 from .const import (
     BLEND_OKLAB,
+    BOUNCE_HI,
+    BOUNCE_LO,
+    CONF_RAINBOW_DIRECTION,
+    DIRECTION_BOUNCE,
+    DIRECTIONS,
     BLEND_WHEEL,
     BLENDS,
     CONF_BLEND,
@@ -142,6 +147,7 @@ class Settings:
     rainbow_lap: float = DEFAULTS[CONF_RAINBOW_LAP]
     brightness_fade: float = DEFAULTS[CONF_BRIGHTNESS_FADE]
     blend: str = DEFAULTS[CONF_BLEND]
+    rainbow_direction: str = DEFAULTS[CONF_RAINBOW_DIRECTION]
 
     @classmethod
     def from_options(cls, options: dict) -> Settings:
@@ -158,8 +164,10 @@ class Settings:
             "brightness_fade": CONF_BRIGHTNESS_FADE,
         }
         blend = options.get(CONF_BLEND, DEFAULTS[CONF_BLEND])
+        direction = options.get(CONF_RAINBOW_DIRECTION, DEFAULTS[CONF_RAINBOW_DIRECTION])
         return cls(
             blend=blend if blend in BLENDS else DEFAULTS[CONF_BLEND],
+            rainbow_direction=direction if direction in DIRECTIONS else DEFAULTS[CONF_RAINBOW_DIRECTION],
             **{a: float(options.get(k, DEFAULTS[k])) for a, k in keys.items()},
         )
 
@@ -218,6 +226,7 @@ class ColourClock:
         self._next_pick = 0.0
         self._sign = 1
         self._last_t = 0.0
+        self._dir = 1  # Rainbow Bounce: +1 rising, -1 falling
 
     @property
     def blend(self) -> str:
@@ -313,11 +322,37 @@ class ColourClock:
     def _advance(self, now: float, primary_rate: float) -> None:
         if self.mode == MODE_RAINBOW:
             dt = max(0.0, now - self._last_t)
-            self._hue = (self._hue + dt * 360.0 / self.effective_lap(primary_rate)) % 360.0
+            step = dt * 360.0 / self.effective_lap(primary_rate)
+            if self.settings.rainbow_direction == DIRECTION_BOUNCE:
+                self._bounce(step)
+            else:
+                self._hue = (self._hue + step) % 360.0
             self._last_t = max(self._last_t, now)
         elif now >= self._next_pick:
             pick_t = self._next_pick if now - self._next_pick < self.settings.interval else now
             self._pick(pick_t, primary_rate)
+
+    def _bounce(self, step: float) -> None:
+        """Move ``step`` degrees along the triangle wave BOUNCE_LO..BOUNCE_HI (never crossing 0/360)."""
+        span = BOUNCE_HI - BOUNCE_LO
+        pos = min(max(self._hue, BOUNCE_LO), BOUNCE_HI) - BOUNCE_LO
+        u = pos if self._dir > 0 else 2 * span - pos  # unfold onto 0..2*span
+        u = (u + step) % (2 * span)
+        if u <= span:
+            self._hue, self._dir = BOUNCE_LO + u, 1
+        else:
+            self._hue, self._dir = BOUNCE_LO + 2 * span - u, -1
+
+    def set_direction(self, direction: str, now: float, primary_rate: float) -> None:
+        """Switch Loop <-> Bounce live, continuing from the current hue (no jump beyond clamping into 0.5..359.5)."""
+        if direction == self.settings.rainbow_direction:
+            return
+        if self.mode == MODE_RAINBOW:
+            self._advance(now, primary_rate)  # with the old direction
+        self.settings.rainbow_direction = direction
+        if direction == DIRECTION_BOUNCE:
+            self._dir = 1
+            self._hue = min(max(self._hue, BOUNCE_LO), BOUNCE_HI)
 
     def hue_at(self, now: float, primary_rate: float) -> float:
         """Advance the schedule to ``now`` (idempotent) and return the logical hue."""

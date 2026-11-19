@@ -12,7 +12,7 @@
       },
       "settings": {
         "title": "Set-once settings",
-        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time and each follower's vs main light number are on the device card after setup.",
+        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time, Rainbow direction and each follower's vs main light number are on the device card after setup.",
         "data": {
           "max_step": "Maximum step",
           "fixed_fade": "Fixed colour fade (0 = use hue speed)",
@@ -61,7 +61,7 @@
       },
       "settings": {
         "title": "Set-once settings",
-        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time and each follower's vs main light number live on the device card and apply at once.",
+        "description": "{warning}Colour mode, Blend, Colour change speed, Time between colours, Drift smallest and largest move, Rainbow cycle time, Rainbow direction and each follower's vs main light number live on the device card and apply at once.",
         "data": {
           "max_step": "Maximum step",
           "fixed_fade": "Fixed colour fade (0 = use hue speed)",

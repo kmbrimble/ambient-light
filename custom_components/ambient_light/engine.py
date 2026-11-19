@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
@@ -58,6 +59,9 @@ MIN_RATE = 0.2
 WARN_INTERVAL = 600.0
 CONTEXT_MEMORY = 512
 INFO_INTERVAL = 600.0
+# After a light returns from unavailable/unknown its first reports are its own (stale) state, not a human's:
+# for this long a colour/brightness deviation WITHOUT a user/parent context is ignored and we keep re-sending.
+RECOVERY_GRACE = 8.0
 # An empty-context change counts as someone else only if it moves this far from what we last sent.
 # Anything smaller is rounding or an echo (tuya_local rewrites state from the device's own report).
 # Colour is compared hue-agnostically (hue is unstable at low saturation): the largest difference on any
@@ -160,6 +164,7 @@ class Slot:
     skipped: int = 0
     sent_times: deque = field(default_factory=lambda: deque(maxlen=2000))
     unavailable: bool = False
+    grace_until: float = float("-inf")  # clock time until which an empty-context deviation is ignored
 
     @property
     def sent_hue(self) -> float | None:
@@ -237,6 +242,7 @@ class Engine:
         self._ctx_ids: deque[str] = deque(maxlen=CONTEXT_MEMORY)
         self._ctx_set: set[str] = set()
         self._unsub: Callable[[], None] | None = None
+        self._unsub_calls: Callable[[], None] | None = None
         self._last_warn = -WARN_INTERVAL
         self._info_last: dict[tuple[str, str], float] = {}
 
@@ -321,6 +327,7 @@ class Engine:
         s.min_jump, s.max_jump = new.min_jump, new.max_jump
         if interval_changed and self.on:
             self.colour.reschedule(now)
+        self.colour.set_direction(new.rainbow_direction, now, self.primary_rate)
         self.set_blend(new.blend, notify=False)
         mode = options.get(CONF_MODE, DEFAULTS[CONF_MODE])
         if mode in MODES:
@@ -401,6 +408,7 @@ class Engine:
         self._unsub = async_track_state_change_event(
             self.hass, list(self.slots), self._handle_state_event
         )
+        self._unsub_calls = self.hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle_service_call)
         pstate = self.hass.states.get(self.primary_id)
         if _gone(pstate):
             self.slots[self.primary_id].unavailable = True
@@ -413,6 +421,9 @@ class Engine:
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if self._unsub_calls:
+            self._unsub_calls()
+            self._unsub_calls = None
         await self._cancel_tasks()
 
     def _sync_tasks(self) -> None:
@@ -578,6 +589,43 @@ class Engine:
         else:
             self._follower_event(eid, old, new)
 
+    @callback
+    def _handle_service_call(self, event: Event) -> None:
+        """A light service call that is not ours, aimed at the primary or a follower, is a manual change.
+
+        The state write is not enough on its own: an entity keeps ONE context (the last service call to it,
+        reused for ~5 s), so our next command, 0.5 s later, can overwrite the user's before the device's
+        answer is written, and the state then carries OUR context (see ``is_ours``). The call event always
+        carries the caller's own context. Only turn_on for followers: a foreign turn_off is handled by the
+        state path, which knows about handing a released follower back.
+        """
+        data = event.data
+        if data.get("domain") != "light" or self.is_ours(event.context):
+            return
+        service = data.get("service")
+        if service not in ("turn_on", "turn_off", "toggle"):
+            return
+        ids = (data.get("service_data") or {}).get("entity_id")
+        ids = [ids] if isinstance(ids, str) else (ids or [])
+        if self.primary_id in ids and self.active:
+            slot = self.slots[self.primary_id]
+            self._log_call("Pausing", self.primary_id, service, event.context, slot)
+            self.paused = True
+            self._sync_tasks()
+            self.on_change()
+        if self.on and service in ("turn_on", "toggle"):
+            for eid in ids:
+                if eid in self.slots and eid != self.primary_id and eid not in self.released:
+                    self._log_call("Releasing", eid, service, event.context, self.slots[eid])
+                    self.released.add(eid)
+                    self.on_change()
+
+    def _log_call(self, action: str, eid: str, service: str, ctx: Context, slot: Slot) -> None:
+        _LOGGER.warning(
+            "%s %s: rule=service_call light.%s context(user_id=%s parent_id=%s ours=False) sent(hue=%s bright=%s)",
+            action, eid, service, ctx.user_id, ctx.parent_id, _r(slot.sent_hue), slot.sent_bright,
+        )
+
     def _primary_event(self, old, new) -> None:
         slot = self.slots[self.primary_id]
         if _gone(new):
@@ -585,11 +633,10 @@ class Engine:
                 self.primary_unavailable_count += 1
             slot.unavailable = True
             return
+        recovered = slot.unavailable or _gone(old)
         slot.unavailable = False
-        recovered = _gone(old)
         if recovered:
-            slot.last_sent = None  # a returning light has lost our colour: resend
-            slot.sent_colour = slot.sent_bright = None
+            self._resync(slot)
         if not self.active:
             return
         ctx = new.context
@@ -606,6 +653,9 @@ class Engine:
             return
         elif _has_origin(ctx):
             rule = "origin"
+        elif self._in_grace(slot):
+            slot.last_sent = None  # just back from unavailable: its report is its own old state; keep re-sending
+            return
         else:
             # An empty context is not evidence of a human (device pushes, rounded echoes).
             rule = self._deviation(slot, new)
@@ -624,8 +674,7 @@ class Engine:
         recovered = slot.unavailable or _gone(old)
         slot.unavailable = False
         if recovered:
-            slot.last_sent = None  # a returning light has lost our colour: resend
-            slot.sent_colour = slot.sent_bright = None
+            self._resync(slot)
         if not self.on:
             return
         # The engine only ever sends hs/rgb: a follower that BECOMES colour-temp/white/brightness-only
@@ -643,11 +692,11 @@ class Engine:
             return
         if recovered and not _has_origin(ctx):
             return  # startup / integration re-reporting: adopted stays adopted, released stays released
-        if new.state == STATE_OFF and (eid in self.released or recovered):
+        if new.state == STATE_OFF and eid in self.released:
             # Hand a released follower back only on a genuine on->off of one that was ALREADY released
             # before this event (or returned from unavailable carrying an origin context: a user's off). An off->off write (a device echo or attribute refresh right after the
             # release) must not re-adopt it, or the next tick would turn it back on.
-            if eid in self.released and ((old is not None and old.state == STATE_ON) or recovered):
+            if (old is not None and old.state == STATE_ON) or recovered:
                 self.released.discard(eid)
                 slot.last_sent = None
                 self.on_change()
@@ -656,10 +705,26 @@ class Engine:
             self._release(eid, "origin", new, old)
         elif new.state == STATE_OFF:
             self._release(eid, "off", new, old)
+        elif self._in_grace(slot):
+            slot.last_sent = None  # just back from unavailable: its report is its own old state; keep re-sending
         else:
             rule = self._deviation(slot, new)
             if rule is not None:
                 self._release(eid, rule, new, old)
+
+    def _resync(self, slot: Slot) -> None:
+        """A light is back from unavailable/unknown: it lost our colour. Resend on the next tick and open the grace window."""
+        slot.last_sent = None
+        slot.sent_colour = slot.sent_bright = None
+        slot.grace_until = self._clock() + RECOVERY_GRACE
+        if self.on:
+            _LOGGER.info(
+                "%s is back from unavailable: resyncing (colour re-sent on the next step; deviations without a user context ignored for %.0f s)",
+                slot.entity_id, RECOVERY_GRACE,
+            )
+
+    def _in_grace(self, slot: Slot) -> bool:
+        return self._clock() < slot.grace_until
 
     def _deviation(self, slot: Slot, new) -> str | None:
         """Rule name if ``new`` moved materially away from what we last sent, else None."""
@@ -754,6 +819,7 @@ class Engine:
             return
         state = self.hass.states.get(slot.entity_id)
         if state is None or state.state == STATE_UNAVAILABLE:
+            slot.unavailable = True  # whatever the events said: its return must count as a recovery
             return
         if not slot.primary and slot.entity_id in self.released:
             return
@@ -773,6 +839,8 @@ class Engine:
             raise
         except Exception as err:  # noqa: BLE001
             slot.last_sent = None
+            if _gone(self.hass.states.get(slot.entity_id)):
+                slot.unavailable = True  # the send failed because the light dropped out
             self._note_failure(slot.entity_id, err)
         else:
             slot.last_sent = key
