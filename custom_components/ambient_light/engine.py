@@ -69,6 +69,9 @@ RECOVERY_GRACE = 8.0
 # channel by 12 x 255/60 = 51, so saturated colours keep the old 12 degree tolerance.
 COLOUR_TOLERANCE = 12.0 * 255.0 / 60.0
 BRIGHTNESS_TOLERANCE = 0.15 * 255
+# A device behind a flaky link reports the last command that got through, not the latest: an empty-context
+# report matching anything we sent in this window is a stale echo, not a person.
+ECHO_HISTORY = 60.0
 
 
 # Colour modes the engine never sends: a follower reporting one was changed by something else.
@@ -165,6 +168,8 @@ class Slot:
     sent_times: deque = field(default_factory=lambda: deque(maxlen=2000))
     unavailable: bool = False
     grace_until: float = float("-inf")  # clock time until which an empty-context deviation is ignored
+    history: deque = field(default_factory=lambda: deque(maxlen=400))  # (time, colour, value, brightness) we sent
+    send_failed: bool = False  # a send failed: the next state report opens the grace window
 
     @property
     def sent_hue(self) -> float | None:
@@ -376,6 +381,7 @@ class Engine:
             slot = self.slots[eid]
             slot.last_sent = None  # resend even if the colour has not changed
             slot.sent_colour = slot.sent_bright = None
+            slot.history.clear()
         if moved:
             self.on_change()
         return moved
@@ -451,6 +457,8 @@ class Engine:
         for s in self.slots.values():
             s.last_sent = None
             s.sent_colour = s.sent_bright = None
+            s.history.clear()
+            s.send_failed = False
 
     # ------------------------------------------------------------------
     # Commands from the virtual light
@@ -637,6 +645,8 @@ class Engine:
         slot.unavailable = False
         if recovered:
             self._resync(slot)
+        elif slot.send_failed:
+            self._failed_send_resync(slot)
         if not self.active:
             return
         ctx = new.context
@@ -659,7 +669,7 @@ class Engine:
         else:
             # An empty context is not evidence of a human (device pushes, rounded echoes).
             rule = self._deviation(slot, new)
-            if rule is None:
+            if rule is None or self._stale_echo(slot, new, rule):
                 return
         self._log_decision("Pausing", self.primary_id, rule, new, slot, old)
         self.paused = True
@@ -675,6 +685,8 @@ class Engine:
         slot.unavailable = False
         if recovered:
             self._resync(slot)
+        elif slot.send_failed:
+            self._failed_send_resync(slot)
         if not self.on:
             return
         # The engine only ever sends hs/rgb: a follower that BECOMES colour-temp/white/brightness-only
@@ -709,7 +721,7 @@ class Engine:
             slot.last_sent = None  # just back from unavailable: its report is its own old state; keep re-sending
         else:
             rule = self._deviation(slot, new)
-            if rule is not None:
+            if rule is not None and not self._stale_echo(slot, new, rule):
                 self._release(eid, rule, new, old)
 
     def _resync(self, slot: Slot) -> None:
@@ -717,11 +729,43 @@ class Engine:
         slot.last_sent = None
         slot.sent_colour = slot.sent_bright = None
         slot.grace_until = self._clock() + RECOVERY_GRACE
+        slot.send_failed = False
         if self.on:
             _LOGGER.info(
-                "%s is back from unavailable: resyncing (colour re-sent on the next step; deviations without a user context ignored for %.0f s)",
+                "%s is back from unavailable or a failed send: resyncing (colour re-sent on the next step; deviations without a user context ignored for %.0f s)",
                 slot.entity_id, RECOVERY_GRACE,
             )
+
+    def _failed_send_resync(self, slot: Slot) -> None:
+        """The first state report after a failed send is the device catching up (or still stale): open the grace window."""
+        slot.send_failed = False
+        self._resync(slot)
+
+    def _stale_echo(self, slot: Slot, new, rule: str) -> bool:
+        """True if an empty-context ``new`` matches a colour (and brightness, if reported) we sent within ECHO_HISTORY.
+
+        The light is lagging: it shows the last command that got through. Resend instead of releasing/pausing.
+        A colour we never sent still counts as someone else.
+        """
+        colour, value, bright = _chroma_bright(new.attributes)
+        now = self._clock()
+        while slot.history and now - slot.history[0][0] > ECHO_HISTORY:
+            slot.history.popleft()
+        for _t, h_colour, h_value, h_bright in slot.history:
+            if colour is not None and h_colour is not None and _colour_diff(colour, h_colour) > COLOUR_TOLERANCE:
+                continue
+            if bright is not None and h_bright is not None and abs(bright * value - h_bright * h_value) > BRIGHTNESS_TOLERANCE:
+                continue
+            slot.last_sent = None  # resend the current colour on the next step
+            key = (slot.entity_id, "stale_echo")
+            if now - self._info_last.get(key, -INFO_INTERVAL) >= INFO_INTERVAL:
+                self._info_last[key] = now
+                _LOGGER.info(
+                    "%s reported a colour we sent earlier (rule=%s would have fired, hue=%s): stale echo, resending",
+                    slot.entity_id, rule, _r(rgb_to_hs_v(colour)[0]) if colour is not None else None,
+                )
+            return True
+        return False
 
     def _in_grace(self, slot: Slot) -> bool:
         return self._clock() < slot.grace_until
@@ -829,6 +873,9 @@ class Engine:
             return
         ctx = self.new_context()
         slot.sent_colour, slot.sent_value, slot.sent_bright = _chroma_bright(data)  # before the await: echoes land during it
+        slot.history.append((self._clock(), slot.sent_colour, slot.sent_value, slot.sent_bright))
+        while slot.history and self._clock() - slot.history[0][0] > ECHO_HISTORY:
+            slot.history.popleft()
         slot.in_flight = True
         t0 = self._clock()
         try:
@@ -839,6 +886,7 @@ class Engine:
             raise
         except Exception as err:  # noqa: BLE001
             slot.last_sent = None
+            slot.send_failed = True  # the next state report opens the grace window
             if _gone(self.hass.states.get(slot.entity_id)):
                 slot.unavailable = True  # the send failed because the light dropped out
             self._note_failure(slot.entity_id, err)
