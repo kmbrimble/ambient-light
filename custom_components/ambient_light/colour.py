@@ -17,6 +17,7 @@ from .const import (
     DIRECTIONS,
     BLEND_WHEEL,
     BLENDS,
+    CONF_AUTO_TAKEBACK,
     CONF_BLEND,
     DEFAULTS,
     CONF_BRIGHTNESS_FADE,
@@ -148,6 +149,7 @@ class Settings:
     brightness_fade: float = DEFAULTS[CONF_BRIGHTNESS_FADE]
     blend: str = DEFAULTS[CONF_BLEND]
     rainbow_direction: str = DEFAULTS[CONF_RAINBOW_DIRECTION]
+    auto_takeback: float = DEFAULTS[CONF_AUTO_TAKEBACK]  # minutes; 0 = off
 
     @classmethod
     def from_options(cls, options: dict) -> Settings:
@@ -162,6 +164,7 @@ class Settings:
             "momentum": CONF_MOMENTUM,
             "rainbow_lap": CONF_RAINBOW_LAP,
             "brightness_fade": CONF_BRIGHTNESS_FADE,
+            "auto_takeback": CONF_AUTO_TAKEBACK,
         }
         blend = options.get(CONF_BLEND, DEFAULTS[CONF_BLEND])
         direction = options.get(CONF_RAINBOW_DIRECTION, DEFAULTS[CONF_RAINBOW_DIRECTION])

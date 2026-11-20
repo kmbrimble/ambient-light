@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import AmbientConfigEntry
 from .const import (
+    CONF_AUTO_TAKEBACK,
     CONF_HUE_SPEED,
     CONF_INTERVAL,
     CONF_MAX_JUMP,
@@ -47,6 +48,7 @@ SPECS = (
     _Spec("rainbow_lap", "Rainbow cycle time", CONF_RAINBOW_LAP, UnitOfTime.SECONDS, 10, 3600, 5, NumberMode.BOX, "mdi:rotate-right"),
     _Spec("min_jump", "Drift smallest move", CONF_MIN_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-collapse-horizontal"),
     _Spec("max_jump", "Drift largest move", CONF_MAX_JUMP, "°", 1, 180, 1, NumberMode.BOX, "mdi:arrow-expand-horizontal"),
+    _Spec("auto_takeback", "Auto take-back after unexplained change", CONF_AUTO_TAKEBACK, UnitOfTime.MINUTES, 0, 120, 1, NumberMode.BOX, "mdi:backup-restore"),
 )
 
 

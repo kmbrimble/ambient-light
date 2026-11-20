@@ -32,6 +32,7 @@ CONF_BLEND = "blend"
 CONF_RAINBOW_DIRECTION = "rainbow_direction"
 CONF_PRIMARY_RATE_CAP = "primary_rate_cap"
 CONF_FOLLOWER_RATE_CAP = "follower_rate_cap"
+CONF_AUTO_TAKEBACK = "auto_takeback"
 
 BLEND_WHEEL = "wheel"
 BLEND_OKLAB = "oklab"
@@ -63,6 +64,7 @@ DEFAULTS = {
     CONF_BRIGHTNESS_FADE: 60.0,
     CONF_BLEND: BLEND_WHEEL,
     CONF_RAINBOW_DIRECTION: DIRECTION_LOOP,
+    CONF_AUTO_TAKEBACK: 0.0,
 }
 
 # Maximum commands per second per light, by platform of the entity.
@@ -77,7 +79,7 @@ RATE_CAP_STEP = 0.5
 # the options flow carries the stored values over unchanged.
 ENTITY_OPTIONS = (
     CONF_MODE, CONF_BLEND, CONF_INTERVAL, CONF_HUE_SPEED, CONF_RAINBOW_LAP, CONF_RAINBOW_DIRECTION,
-    CONF_MIN_JUMP, CONF_MAX_JUMP,
+    CONF_MIN_JUMP, CONF_MAX_JUMP, CONF_AUTO_TAKEBACK,
 )
 # Options that apply live (no reload): the entity options and the rate caps. Follower brightness
 # (``follower_settings[entity][scale]``) is live too; the rest of ``follower_settings`` is not.

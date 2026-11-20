@@ -72,6 +72,8 @@ BRIGHTNESS_TOLERANCE = 0.15 * 255
 # A device behind a flaky link reports the last command that got through, not the latest: an empty-context
 # report matching anything we sent in this window is a stale echo, not a person.
 ECHO_HISTORY = 60.0
+# Releases with these rules and NO user/parent context are "unexplained" and may be taken back automatically.
+TAKEBACK_RULES = ("colour_deviation", "brightness_deviation", "colour_mode")
 
 
 # Colour modes the engine never sends: a follower reporting one was changed by something else.
@@ -170,6 +172,11 @@ class Slot:
     grace_until: float = float("-inf")  # clock time until which an empty-context deviation is ignored
     history: deque = field(default_factory=lambda: deque(maxlen=400))  # (time, colour, value, brightness) we sent
     send_failed: bool = False  # a send failed: the next state report opens the grace window
+    soft_down: bool = False  # the entity object says available=False while its state still reads on/off
+    down_since: float | None = None  # clock time the light dropped out (hard or soft); None while it is there
+    release_rule: str | None = None  # why a follower was released
+    released_at: float = 0.0
+    takeback_ok: bool = False  # the release had no origin context: eligible for the automatic take-back
 
     @property
     def sent_hue(self) -> float | None:
@@ -330,6 +337,7 @@ class Engine:
         interval_changed = new.interval != s.interval
         s.interval, s.hue_speed, s.rainbow_lap = new.interval, new.hue_speed, new.rainbow_lap
         s.min_jump, s.max_jump = new.min_jump, new.max_jump
+        s.auto_takeback = new.auto_takeback
         if interval_changed and self.on:
             self.colour.reschedule(now)
         self.colour.set_direction(new.rainbow_direction, now, self.primary_rate)
@@ -417,7 +425,7 @@ class Engine:
         self._unsub_calls = self.hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle_service_call)
         pstate = self.hass.states.get(self.primary_id)
         if _gone(pstate):
-            self.slots[self.primary_id].unavailable = True
+            self._set_down(self.slots[self.primary_id])
             self.primary_unavailable_count += 1
         self._sync_tasks()
 
@@ -625,6 +633,7 @@ class Engine:
             for eid in ids:
                 if eid in self.slots and eid != self.primary_id and eid not in self.released:
                     self._log_call("Releasing", eid, service, event.context, self.slots[eid])
+                    self._mark_released(self.slots[eid], "service_call", False)
                     self.released.add(eid)
                     self.on_change()
 
@@ -639,8 +648,10 @@ class Engine:
         if _gone(new):
             if not slot.unavailable:
                 self.primary_unavailable_count += 1
-            slot.unavailable = True
+            self._set_down(slot)
             return
+        if self._refresh_soft(slot):
+            return  # its entity is down: whatever it reports now is not a person
         recovered = slot.unavailable or _gone(old)
         slot.unavailable = False
         if recovered:
@@ -679,7 +690,9 @@ class Engine:
     def _follower_event(self, eid: str, old, new) -> None:
         slot = self.slots[eid]
         if _gone(new):
-            slot.unavailable = True
+            self._set_down(slot)
+            return
+        if self._refresh_soft(slot):
             return
         recovered = slot.unavailable or _gone(old)
         slot.unavailable = False
@@ -730,6 +743,14 @@ class Engine:
         slot.sent_colour = slot.sent_bright = None
         slot.grace_until = self._clock() + RECOVERY_GRACE
         slot.send_failed = False
+        if slot.down_since is not None:
+            # Echo history must cover the whole dropout: freeze the age of what we sent before it.
+            gap = self._clock() - slot.down_since
+            slot.history = deque(
+                ((t + gap, *rest) for t, *rest in slot.history if slot.down_since - t <= ECHO_HISTORY),
+                maxlen=slot.history.maxlen,
+            )
+            slot.down_since = None
         if self.on:
             _LOGGER.info(
                 "%s is back from unavailable or a failed send: resyncing (colour re-sent on the next step; deviations without a user context ignored for %.0f s)",
@@ -765,6 +786,57 @@ class Engine:
                     slot.entity_id, rule, _r(rgb_to_hs_v(colour)[0]) if colour is not None else None,
                 )
             return True
+        return False
+
+    # -- availability --------------------------------------------------
+    def _set_down(self, slot: Slot) -> None:
+        """Mark a light as dropped out (hard or soft) and remember when, so the echo history can cover the gap."""
+        slot.unavailable = True
+        if slot.down_since is None:
+            slot.down_since = self._clock()
+
+    def _entity_available(self, entity_id: str) -> bool | None:
+        """The live entity's ``available`` flag, from the light EntityComponent; None if it cannot be found.
+
+        A device whose integration stops answering (tuya_local) can stay ``on`` in the state machine while
+        its entity object reports ``available=False``: HA then skips every service call to it with a log line
+        and no exception. The state never changes, so only the entity object shows it.
+        """
+        component = self.hass.data.get("light")
+        get_entity = getattr(component, "get_entity", None)
+        if get_entity is None:
+            return None
+        try:
+            entity = get_entity(entity_id)
+        except Exception:  # noqa: BLE001 - never let a lookup break the engine
+            return None
+        available = getattr(entity, "available", None) if entity is not None else None
+        return available if isinstance(available, bool) else None
+
+    def _refresh_soft(self, slot: Slot) -> bool:
+        """Track a soft dropout (state on/off but the entity not available). True while the light is down.
+
+        Going down: mark it, count it (primary), log at info once. Coming back: the same recovery as an
+        unavailable -> available state change (resync, grace window, echo history kept across the gap).
+        """
+        available = self._entity_available(slot.entity_id)
+        if available is False:
+            if not slot.soft_down:
+                slot.soft_down = True
+                self._set_down(slot)
+                if slot.primary:
+                    self.primary_unavailable_count += 1
+                _LOGGER.info(
+                    "%s is not available (its state still reads %s): skipping sends until it is back",
+                    slot.entity_id, getattr(self.hass.states.get(slot.entity_id), "state", None),
+                )
+            return True
+        if slot.soft_down:
+            slot.soft_down = False
+            if not _gone(self.hass.states.get(slot.entity_id)):  # a hard unavailable is the state path's to resolve
+                slot.unavailable = False
+                _LOGGER.info("%s is available again", slot.entity_id)
+                self._resync(slot)
         return False
 
     def _in_grace(self, slot: Slot) -> bool:
@@ -805,8 +877,36 @@ class Engine:
     def _release(self, eid: str, rule: str, new, old=None) -> None:
         if eid not in self.released:
             self._log_decision("Releasing", eid, rule, new, self.slots[eid], old)
+            self._mark_released(self.slots[eid], rule, rule in TAKEBACK_RULES and not _has_origin(new.context))
             self.released.add(eid)
             self.on_change()
+
+    def _mark_released(self, slot: Slot, rule: str, takeback_ok: bool) -> None:
+        slot.release_rule, slot.released_at, slot.takeback_ok = rule, self._clock(), takeback_ok
+
+    def _maybe_take_back(self, slot: Slot, state) -> None:
+        """Re-adopt a follower released for an unexplained change once the configured minutes have passed.
+
+        Only releases with no user/parent context and a deviation / colour-mode rule qualify (never a service
+        call or an off). The light must still be on at that moment; if it is not, the take-back is cancelled.
+        """
+        minutes = self.settings.auto_takeback
+        if minutes <= 0 or not slot.takeback_ok or self._clock() - slot.released_at < minutes * 60.0:
+            return
+        if state.state != STATE_ON:
+            slot.takeback_ok = False
+            return
+        self.released.discard(slot.entity_id)
+        slot.takeback_ok = False
+        slot.last_sent = None
+        slot.sent_colour = slot.sent_bright = None
+        slot.history.clear()
+        _LOGGER.warning(
+            "Taking %s back after %.0f min: it was released for rule=%s with no user context (auto take-back)",
+            slot.entity_id, minutes, slot.release_rule,
+        )
+        self._resync(slot)
+        self.on_change()
 
     # ------------------------------------------------------------------
     # Sending
@@ -863,9 +963,12 @@ class Engine:
             return
         state = self.hass.states.get(slot.entity_id)
         if state is None or state.state == STATE_UNAVAILABLE:
-            slot.unavailable = True  # whatever the events said: its return must count as a recovery
+            self._set_down(slot)  # whatever the events said: its return must count as a recovery
+            return
+        if self._refresh_soft(slot):
             return
         if not slot.primary and slot.entity_id in self.released:
+            self._maybe_take_back(slot, state)
             return
         now = self._clock()
         data, key = self.build_command(slot, now)
@@ -888,7 +991,7 @@ class Engine:
             slot.last_sent = None
             slot.send_failed = True  # the next state report opens the grace window
             if _gone(self.hass.states.get(slot.entity_id)):
-                slot.unavailable = True  # the send failed because the light dropped out
+                self._set_down(slot)  # the send failed because the light dropped out
             self._note_failure(slot.entity_id, err)
         else:
             slot.last_sent = key
